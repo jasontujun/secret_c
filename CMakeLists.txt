@@ -21,11 +21,16 @@ set(secret_src
         src/secret_image.c
         src/secret_util.c)
 
-set(TEST_RW_FILES
+add_executable(test_r
+        ${libpng_header}
+        ${secret_header}
+        ${secret_src}
+        test/test_r.c)
+target_link_libraries(test_r ${PROJECT_SOURCE_DIR}/lib/libpng16d.dll)
+
+add_executable(test_rw
         ${libpng_header}
         ${secret_header}
         ${secret_src}
         test/test_rw.c)
-
-add_executable(test_rw ${TEST_RW_FILES})
 target_link_libraries(test_rw ${PROJECT_SOURCE_DIR}/lib/libpng16d.dll)

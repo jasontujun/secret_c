@@ -13,8 +13,14 @@ typedef struct _secret {
     size_t size;
 } secret;
 
+/**
+ * 动态创建secret结构体对象。
+ */
 secret * create_secret();
 
+/**
+ * 回收secret结构体对象。
+ */
 void free_secret(secret *se);
 
 /**
@@ -30,11 +36,13 @@ void free_secret(secret *se);
  * @return 如果提取成功，返回提取secret信息的字节数(大于等于0)；
  * 如果提取失败，返回对应的错误码(小于0)：
  *      -1：传入参数为空或非法；
- *      -2：图片文件读方式打开失败；
- *      -3：图片文件读操作出错；
- *      -4：图片interlace属性不合法，无法解析；
- *      -5：图片color_type属性不合法，无法解析；
- *      -6：图片包含的最大secret字节数小于期望字节数；
+ *      -2：secret文件读方式打开失败；
+ *      -3：图片文件读方式打开失败；
+ *      -4：图片文件读操作出错；
+ *      -5：图片interlace属性不合法，无法解析；
+ *      -6：图片color_type属性不合法，无法解析；
+ *      -7：图片包含的最大secret字节数小于期望字节数；
+ *      -8：secret存储为文件时出错
  */
 int read_image(const char *image_file, secret *se);
 

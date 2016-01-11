@@ -14,6 +14,10 @@ unsigned char to_even(unsigned char data) {
     return data & 0x01 ? (unsigned char) ((data < 127) ? data + 1 : data - 1) : data;
 }
 
+size_t contains_secret_bytes(size_t data_size) {
+    return data_size / 8;
+}
+
 int write_secret_to_data(unsigned char *data_p, int data_offset, size_t data_size,
                          char *secret_p, int secret_offset, size_t secret_size,
                          remainder *remain, filter* f) {
