@@ -853,7 +853,6 @@ int write_image(const char *image_input_file,
             error_code = -10;
             goto EXCEPTION;
         }
-        se->size = real_size;
         rewind(secret_file);
         secret_buf_max = contains_secret_bytes(row_buf_size) + 1;// 缓冲区大小
         secret_buf = malloc(secret_buf_max);

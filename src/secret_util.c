@@ -57,6 +57,6 @@ size_t get_adam7_byte_size(size_t row_byte, int pass, unsigned char color_type) 
     size_t real_size = row_byte / color_byte;
     int interval = adam7_row_interval[pass];
     int offset = adam7_row_offset[pass];
-    return (real_size - offset) / interval * color_byte;
+    return (real_size - offset + interval - 1) / interval * color_byte;// 除法向上取整
 }
 

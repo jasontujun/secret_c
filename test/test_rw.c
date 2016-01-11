@@ -46,8 +46,8 @@ void test_file(const char *rw_inname, const char *rw_outname) {
 
 int main(int argc, char *argv[]) {
 
-    static const char *rw_inname = "H:\\img_test\\pngtest_rgba_interlace2.png";
-    static const char *rw_outname = "H:\\img_test\\out_pngtest_rgba_interlace2.png";
+    static const char *rw_inname = "H:\\img_test\\pngtest_rgb_interlace_19x19.png";
+    static const char *rw_outname = "H:\\img_test\\out_pngtest_rgb_interlace_19x19.png";
 
 //    test_mem(rw_inname, rw_outname);
     test_file(rw_inname, rw_outname);
