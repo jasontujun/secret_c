@@ -11,10 +11,6 @@
 #include "secret_util.h"
 
 
-#ifndef max
-#define max(a,b) ((a)>(b)?(a):(b))
-#endif
-
 #ifndef min
 #define min(a,b) ((a)<(b)?(a):(b))
 #endif
@@ -276,7 +272,7 @@ int read_image(const char *image_file, secret *se) {
         free(secret_buf);
         return error_code;
     }
-    // =============== 统一出错处理代码[end] =============== //
+        // =============== 统一出错处理代码[end] =============== //
 
 #ifdef PNG_SETJMP_SUPPORTED
     secret_debug("Setting jmpbuf for read struct");
@@ -365,17 +361,16 @@ int read_image(const char *image_file, secret *se) {
     for (pass = 0; pass < num_pass; pass++) {
         fprintf(STDERR, "Reading row data for pass %d\n", pass);
         for (y = 0; y < height; y++) {
-            // read rgba info
             png_read_row(read_ptr, row_buf, NULL);
             // 如果不是adam7有效行，直接跳过
             if (!row_is_adam7(y, num_pass > 1 ? pass : -1)) {
                 continue;
             }
-            // parse secret!
             param.pass = num_pass > 1 ? pass : -1;
             read_result = read_secret_from_data(row_buf, 0, row_buf_size,
                                                 secret_buf, secret_offset,
-                                                min(secret_buf_size, real_size - secret_offset),
+                                                se->file_path ? min(secret_buf_size, real_size - secret_read)
+                                                              : real_size - secret_offset,
                                                 &remain, &f);
             if (read_result > 0) {
                 secret_read += read_result;
@@ -389,13 +384,13 @@ int read_image(const char *image_file, secret *se) {
                 } else {
                     secret_offset = secret_read;
                 }
-                if (secret_read == real_size) {// 读取的secret内容已满，达到指定的长度，退出循环
+                if (secret_read >= real_size) {// 读取的secret内容已满，达到指定的长度，退出循环
                     secret_debug("Parse secret finish!!");
                     break;
                 }
             }
         }
-        if (secret_read == real_size) {// 读取的secret内容已满，达到指定的长度，退出循环
+        if (secret_read >= real_size) {// 读取的secret内容已满，达到指定的长度，退出循环
             break;
         }
     }
@@ -499,7 +494,7 @@ int write_image(const char *image_input_file,
         }
         return error_code;
     }
-    // =============== 统一出错处理代码[end] =============== //
+        // =============== 统一出错处理代码[end] =============== //
 
 #ifdef PNG_SETJMP_SUPPORTED
     secret_debug("Setting jmpbuf for read struct");
@@ -861,8 +856,13 @@ int write_image(const char *image_input_file,
         }
         rewind(secret_file);
         secret_buf_max = contains_secret_bytes(row_buf_size) + 2;// secret缓冲区大小，考虑到余数，必须再加2！
-        secret_buf_size = secret_buf_max;
         secret_buf = malloc(secret_buf_max);
+        secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
+        if (ferror(secret_file)) {
+            secret_debug("[error]Secret file read error!");
+            error_code = -10;
+            goto EXCEPTION;
+        }
         secret_debug1("Allocating secret buffer...secret_size = %d", secret_buf_max);
     } else {
         real_size = se->size;
@@ -883,45 +883,35 @@ int write_image(const char *image_input_file,
     };
 
     int y;
-    size_t pre_remain_size;
     int write_result = 0;
     int secret_write = 0;// 当前已写入的secret字节数
     for (pass = 0; pass < num_pass; pass++) {
         secret_debug1("Writing row data for pass %d", pass);
         for (y = 0; y < height; y++) {
             png_read_row(read_ptr, row_buf, NULL);
-            // 将secret隐藏进image中
-            if (secret_write < real_size) {
-                if (row_is_adam7(y, num_pass > 1 ? pass : -1)) {
-                    if (write_result >= 0) {
-                        if (se->file_path) {
-                            // 根据已写入的字节数，从secret文件中读取下一段secret_buf
-                            fseek(secret_file, secret_write, SEEK_SET);// 移动文件指针
-                            secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
-                            if (ferror(secret_file)) {
-                                secret_debug("[error]Secret file read error!");
-                                error_code = -10;
-                                goto EXCEPTION;
-                            }
-                        } else {
-                            // secret已全部加载到secret_buf的内存中，直接偏移offset即可
-                            secret_offset += write_result;
-                        }
-                    }
-                }
-                // 为了让write_secret_to_data在adam7无效行上进行写入的结果始终一样，得保证输入的余数和secret的相关参数一样
-                pre_remain_size = remain.size;
+            // 如果secret没写入完毕，且是adam7有效行
+            if (secret_write < real_size && row_is_adam7(y, num_pass > 1 ? pass : -1)) {
+                // 将secret隐藏进image中
                 param.pass = num_pass > 1 ? pass : -1;
                 write_result = write_secret_to_data(row_buf, 0, row_buf_size,
                                                     secret_buf, secret_offset,
-                                                    min(secret_buf_size, real_size - secret_offset),
+                                                    se->file_path ? secret_buf_size : real_size - secret_offset,
                                                     &remain, &f);
-                if (row_is_adam7(y, num_pass > 1 ? pass : -1)) {
-                    if (write_result >= 0) {
-                        secret_write += write_result;
+                if (write_result > 0) {
+                    secret_write += write_result;
+                    if (se->file_path) {
+                        // 根据已写入的字节数，从secret文件中读取下一段secret_buf
+                        fseek(secret_file, secret_write, SEEK_SET);// 移动文件指针
+                        secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
+                        if (ferror(secret_file)) {
+                            secret_debug("[error]Secret file read error!");
+                            error_code = -10;
+                            goto EXCEPTION;
+                        }
+                    } else {
+                        // secret已全部加载到secret_buf的内存中，直接偏移offset即可
+                        secret_offset += write_result;
                     }
-                } else {
-                    remain.size = pre_remain_size;
                 }
             }
             png_write_row(write_ptr, row_buf);
