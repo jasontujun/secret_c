@@ -23,6 +23,8 @@ typedef struct _filter {
 
 /**
  * 获取指定大小的data中包含的secret字节数。
+ * 注意：如果data最后的几个字节不能隐藏1字节的secret数据，
+ * 则data的最后几个字节不会计算在内。换句话说，就是向下取整的计算方式。
  * @data_size data的字节大小
  * @return 返回data中包含的secret字节数
  */

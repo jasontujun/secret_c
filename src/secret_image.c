@@ -340,7 +340,10 @@ int read_image(const char *image_file, secret *se) {
 
     // 创建secret缓存区
     const size_t real_size = expect_size <= 0 ? max_secret_size : expect_size;// 待提取的secret字节数
-    const size_t secret_buf_size = se->file_path ? max(contains_secret_bytes(row_buf_size), 1) : real_size;// 缓冲区大小
+    const size_t secret_buf_size = se->file_path ? // secret缓冲区大小
+                                   (contains_secret_bytes(row_buf_size) + 2) : // 考虑到余数，必须再加2！
+                                   real_size;
+    int secret_offset = 0;
     secret_buf = malloc(secret_buf_size);
     secret_debug1("Allocating secret buffer...secret_size = %d", secret_buf_size);
 
@@ -371,10 +374,11 @@ int read_image(const char *image_file, secret *se) {
             // parse secret!
             param.pass = num_pass > 1 ? pass : -1;
             read_result = read_secret_from_data(row_buf, 0, row_buf_size,
-                                                secret_buf, se->file_path ? 0 : secret_read,
-                                                min(secret_buf_size, real_size - secret_read),
+                                                secret_buf, secret_offset,
+                                                min(secret_buf_size, real_size - secret_offset),
                                                 &remain, &f);
             if (read_result > 0) {
+                secret_read += read_result;
                 if (se->file_path) {// 将写入文件中
                     secret_save_result = fwrite(secret_buf, (size_t) read_result, 1, secret_file);
                     if (secret_save_result < 1 && ferror(secret_file)) {
@@ -382,8 +386,9 @@ int read_image(const char *image_file, secret *se) {
                         error_code = -8;
                         goto EXCEPTION;
                     }
+                } else {
+                    secret_offset = secret_read;
                 }
-                secret_read += read_result;
                 if (secret_read == real_size) {// 读取的secret内容已满，达到指定的长度，退出循环
                     secret_debug("Parse secret finish!!");
                     break;
@@ -844,6 +849,7 @@ int write_image(const char *image_input_file,
     size_t real_size;// secret真正的字节大小
     size_t secret_buf_max;// secret缓冲区的大小上限
     size_t secret_buf_size;// secret缓冲区的实际数据大小
+    int secret_offset = 0;
     if (se->file_path) {
         // 获得文件大小
         fseek(secret_file , 0 , SEEK_END);
@@ -854,14 +860,9 @@ int write_image(const char *image_input_file,
             goto EXCEPTION;
         }
         rewind(secret_file);
-        secret_buf_max = contains_secret_bytes(row_buf_size) + 1;// 缓冲区大小
+        secret_buf_max = contains_secret_bytes(row_buf_size) + 2;// secret缓冲区大小，考虑到余数，必须再加2！
+        secret_buf_size = secret_buf_max;
         secret_buf = malloc(secret_buf_max);
-        secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
-        if (ferror(secret_file)) {
-            secret_debug("[error]Secret file read error!");
-            error_code = -10;
-            goto EXCEPTION;
-        }
         secret_debug1("Allocating secret buffer...secret_size = %d", secret_buf_max);
     } else {
         real_size = se->size;
@@ -882,8 +883,8 @@ int write_image(const char *image_input_file,
     };
 
     int y;
-    int write_result;
     size_t pre_remain_size;
+    int write_result = 0;
     int secret_write = 0;// 当前已写入的secret字节数
     for (pass = 0; pass < num_pass; pass++) {
         secret_debug1("Writing row data for pass %d", pass);
@@ -891,19 +892,10 @@ int write_image(const char *image_input_file,
             png_read_row(read_ptr, row_buf, NULL);
             // 将secret隐藏进image中
             if (secret_write < real_size) {
-                pre_remain_size = remain.size;
-                // 为了让write_secret_to_data在adam7无效行上进行写入的结果始终一样，得保证输入的余数和secret的相关参数一样
-                param.pass = num_pass > 1 ? pass : -1;
-                write_result = write_secret_to_data(row_buf, 0, row_buf_size,
-                                                    secret_buf,
-                                                    se->file_path ? 0 : secret_write,
-                                                    min(secret_buf_size, real_size - secret_write),
-                                                    &remain, &f);
                 if (row_is_adam7(y, num_pass > 1 ? pass : -1)) {
                     if (write_result >= 0) {
-                        secret_write += write_result;
-                        // 根据已写入的字节数，从secret文件中读取下一段secret_buf
                         if (se->file_path) {
+                            // 根据已写入的字节数，从secret文件中读取下一段secret_buf
                             fseek(secret_file, secret_write, SEEK_SET);// 移动文件指针
                             secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
                             if (ferror(secret_file)) {
@@ -911,7 +903,22 @@ int write_image(const char *image_input_file,
                                 error_code = -10;
                                 goto EXCEPTION;
                             }
+                        } else {
+                            // secret已全部加载到secret_buf的内存中，直接偏移offset即可
+                            secret_offset += write_result;
                         }
+                    }
+                }
+                // 为了让write_secret_to_data在adam7无效行上进行写入的结果始终一样，得保证输入的余数和secret的相关参数一样
+                pre_remain_size = remain.size;
+                param.pass = num_pass > 1 ? pass : -1;
+                write_result = write_secret_to_data(row_buf, 0, row_buf_size,
+                                                    secret_buf, secret_offset,
+                                                    min(secret_buf_size, real_size - secret_offset),
+                                                    &remain, &f);
+                if (row_is_adam7(y, num_pass > 1 ? pass : -1)) {
+                    if (write_result >= 0) {
+                        secret_write += write_result;
                     }
                 } else {
                     remain.size = pre_remain_size;

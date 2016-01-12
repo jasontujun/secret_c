@@ -37,7 +37,7 @@ void test_file(const char *rw_inname, const char *rw_outname) {
 
     // read secret from image
     secret *se = create_secret();
-    se->file_path = "H:\\img_test\\secret\\result2.txt";
+    se->file_path = "H:\\img_test\\secret\\result5.txt";
     se->size = (size_t) w_result;
     int r_result = read_image(rw_outname, se);
     printf(">>>read result=%d, read content=%s\n", r_result, se->data);
@@ -46,8 +46,8 @@ void test_file(const char *rw_inname, const char *rw_outname) {
 
 int main(int argc, char *argv[]) {
 
-    static const char *rw_inname = "H:\\img_test\\pngtest_rgb_interlace_19x19.png";
-    static const char *rw_outname = "H:\\img_test\\out_pngtest_rgb_interlace_19x19.png";
+    static const char *rw_inname = "H:\\img_test\\pngtest_gray_interlace_19x19.png";
+    static const char *rw_outname = "H:\\img_test\\out_pngtest_gray_interlace_19x19.png";
 
 //    test_mem(rw_inname, rw_outname);
     test_file(rw_inname, rw_outname);
