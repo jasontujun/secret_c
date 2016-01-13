@@ -6,6 +6,21 @@
 #define SECRET_SECRET_UTIL_H
 
 /**
+ * 检验指定文件是否png图片。
+ * @param file_path 文件路径
+ * @return 如果是png图片，返回非0；如果不是png，则返回0。
+ */
+int check_png(char *file_path);
+
+/**
+ * 检验指定文件是否png图片。
+ * 注意：该方法调用完毕，不会关闭file，并且文件指针会指回文件开头。
+ * @param file_path 文件路径
+ * @return 如果是png图片，返回非0；如果不是png，则返回0。
+ */
+int check_png2(FILE *file);
+
+/**
  * 获取指定颜色类型下，一个颜色像素所占用的字节数。
  * @param color_type 颜色类型(目前只支持0,2,4,6)
  * @return 返回颜色像素所占用的字节数；如果颜色类型不支持或不识别，则返回0。

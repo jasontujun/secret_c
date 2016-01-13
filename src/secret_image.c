@@ -18,7 +18,6 @@
 /* Defined so I can write to a file on gui/windowing platforms */
 #define STDERR stdout   /* For DOS */
 
-/* Makes verbose so we can find problems. */
 #ifndef PNG_DEBUG
 #  define PNG_DEBUG 2
 #endif
@@ -32,10 +31,6 @@
 #  define secret_debug1(m,p1)    ((void)0)
 #  define secret_debug2(m,p1,p2) ((void)0)
 #endif
-
-static int verbose = 1;
-static int strict = 0;
-static int relaxed = 0;
 
 
 /* START of code to validate memory allocation and deallocation */
@@ -111,9 +106,8 @@ PNGCBAPI png_debug_malloc(png_structp png_ptr, png_alloc_size_t size)
         /* Make sure the caller isn't assuming zeroed memory. */
         memset(pinfo->pointer, 0xdd, pinfo->size);
 
-        if (verbose != 0)
-            printf("png_malloc %lu bytes at %p\n", (unsigned long)size,
-                   pinfo->pointer);
+        printf("png_malloc %lu bytes at %p\n", (unsigned long)size,
+               pinfo->pointer);
 
         return (png_voidp)(pinfo->pointer);
     }
@@ -128,16 +122,12 @@ png_debug_free(png_structp png_ptr, png_voidp ptr)
 
     if (ptr == 0)
     {
-#if 0 /* This happens all the time. */
-        fprintf(STDERR, "WARNING: freeing NULL pointer\n");
-#endif
         return;
     }
 
     /* Unlink the element from the list. */
     {
         memory_infop *ppinfo = &pinformation;
-
         for (;;)
         {
             memory_infop pinfo = *ppinfo;
@@ -168,8 +158,7 @@ png_debug_free(png_structp png_ptr, png_voidp ptr)
     }
 
     /* Finally free the data. */
-    if (verbose != 0)
-        printf("Freeing %p\n", ptr);
+    printf("Freeing %p\n", ptr);
 
     if (ptr != NULL)
         free(ptr);
@@ -220,7 +209,7 @@ void free_secret(secret *se){
     }
 }
 
-int read_image(const char *image_file, secret *se) {
+int read_image_directly(const char *image_file, secret *se) {
     if (!image_file || !se) {
         return -1;
     }
@@ -245,6 +234,12 @@ int read_image(const char *image_file, secret *se) {
     if ((fpin = fopen(image_file, "rb")) == NULL) {
         fprintf(STDERR, "Could not find input file %s\n", image_file);
         return -3;
+    }
+
+    if (!check_png2(fpin)) {
+        fprintf(STDERR, "Not PNG file %s\n", image_file);
+        fclose(fpin);
+        return -4;
     }
 
     secret_debug("Allocating read structures");
@@ -278,7 +273,7 @@ int read_image(const char *image_file, secret *se) {
     secret_debug("Setting jmpbuf for read struct");
     if (setjmp(png_jmpbuf(read_ptr))) {
         fprintf(STDERR, "%s: libpng read error\n", image_file);
-        error_code = -4;
+        error_code = -5;
         goto EXCEPTION;
     }
 #endif
@@ -311,7 +306,7 @@ int read_image(const char *image_file, secret *se) {
     num_pass = png_set_interlace_handling(read_ptr);
     if (num_pass != 1 && num_pass != 7) {
         secret_debug1("Image interlace_pass error!! interlace_pass=%d, cannot hide secret!", num_pass);
-        error_code = -5;
+        error_code = -6;
         goto EXCEPTION;
     }
 #endif
@@ -319,14 +314,14 @@ int read_image(const char *image_file, secret *se) {
     const size_t max_secret_size = contains_secret_bytes(width * height * get_color_bytes(color_type));
     if (max_secret_size == 0) {
         secret_debug1("Image color_type error!! color_type=%d, cannot hide secret!", color_type);
-        error_code = -6;
+        error_code = -7;
         goto EXCEPTION;
     }
 
     const size_t expect_size = se->size;
     if (expect_size > 0 && max_secret_size < expect_size) {
         secret_debug1("Max secret size less then %d!", expect_size);
-        error_code = -7;
+        error_code = -8;
         goto EXCEPTION;
     }
 
@@ -378,7 +373,7 @@ int read_image(const char *image_file, secret *se) {
                     secret_save_result = fwrite(secret_buf, (size_t) read_result, 1, secret_file);
                     if (secret_save_result < 1 && ferror(secret_file)) {
                         fprintf(STDERR, "%s: secret file write error\n", se->file_path);
-                        error_code = -8;
+                        error_code = -9;
                         goto EXCEPTION;
                     }
                 } else {
@@ -413,9 +408,9 @@ int read_image(const char *image_file, secret *se) {
 }
 
 
-int write_image(const char *image_input_file,
-                const char *image_output_file,
-                secret *se, size_t min_size) {
+int write_image_directly(const char *image_input_file,
+                         const char *image_output_file,
+                         secret *se, size_t min_size) {
     if (!image_input_file || !image_output_file || !se) {
         return -1;
     }
@@ -451,11 +446,17 @@ int write_image(const char *image_input_file,
         return -3;
     }
 
+    if (!check_png2(fpin)) {
+        fprintf(STDERR, "Not PNG file %s\n", image_input_file);
+        fclose(fpin);
+        return -4;
+    }
+
     if ((fpout = fopen(image_output_file, "wb")) == NULL)
     {
         fprintf(STDERR, "Could not open output file %s\n", image_output_file);
         fclose(fpin);
-        return -4;
+        return -5;
     }
 
     secret_debug("Allocating read and write structures");
@@ -501,7 +502,7 @@ int write_image(const char *image_input_file,
     if (setjmp(png_jmpbuf(read_ptr)))
     {
         fprintf(STDERR, "%s -> %s: libpng read error\n", image_input_file, image_output_file);
-        error_code = -5;
+        error_code = -6;
         goto EXCEPTION;
     }
 
@@ -509,29 +510,14 @@ int write_image(const char *image_input_file,
     if (setjmp(png_jmpbuf(write_ptr)))
     {
         fprintf(STDERR, "%s -> %s: libpng write error\n", image_input_file, image_output_file);
-        error_code = -6;
+        error_code = -7;
         goto EXCEPTION;
     }
 #endif
 
-    if (strict != 0)
-    {
-        /* Treat png_benign_error() as errors on read */
-        png_set_benign_errors(read_ptr, 0);
-        /* Treat them as errors on write */
-        png_set_benign_errors(write_ptr, 0);
-
-        /* if strict is not set, then app warnings and errors are treated as
-         * warnings in release builds, but not in unstable builds; this can be
-         * changed with '--relaxed'.
-         */
-    }
-    else if (relaxed != 0)
-    {
-        /* Allow application (pngtest) errors and warnings to pass */
-        png_set_benign_errors(read_ptr, 1);
-        png_set_benign_errors(write_ptr, 1);
-    }
+    /* Allow application (pngtest) errors and warnings to pass */
+    png_set_benign_errors(read_ptr, 1);
+    png_set_benign_errors(write_ptr, 1);
 
     secret_debug("Initializing input and output streams");
 #ifdef PNG_STDIO_SUPPORTED
@@ -589,7 +575,7 @@ int write_image(const char *image_input_file,
     num_pass = png_set_interlace_handling(read_ptr);
     if (num_pass != 1 && num_pass != 7) {
         secret_debug1("Image interlace_pass error!! interlace_pass=%d, cannot hide secret!", num_pass);
-        error_code = -7;
+        error_code = -8;
         goto EXCEPTION;
     }
 #endif
@@ -597,13 +583,13 @@ int write_image(const char *image_input_file,
     size_t max_secret_size = contains_secret_bytes(width * height * get_color_bytes(color_type));
     if (max_secret_size == 0) {
         secret_debug1("Image color_type error!! color_type=%d, cannot hide secret!", color_type);
-        error_code = -8;
+        error_code = -9;
         goto EXCEPTION;
     }
 
     if (min_size > 0 && max_secret_size < min_size) {
         secret_debug1("Max secret size less then %d!", min_size);
-        error_code = -9;
+        error_code = -10;
         goto EXCEPTION;
     }
 
@@ -851,7 +837,7 @@ int write_image(const char *image_input_file,
         real_size = (size_t) ftell(secret_file);
         if (real_size <= 0) {
             secret_debug("[error]Secret file size is 0!");
-            error_code = -10;
+            error_code = -11;
             goto EXCEPTION;
         }
         rewind(secret_file);
@@ -860,7 +846,7 @@ int write_image(const char *image_input_file,
         secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
         if (ferror(secret_file)) {
             secret_debug("[error]Secret file read error!");
-            error_code = -10;
+            error_code = -12;
             goto EXCEPTION;
         }
         secret_debug1("Allocating secret buffer...secret_size = %d", secret_buf_max);
@@ -905,7 +891,7 @@ int write_image(const char *image_input_file,
                         secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
                         if (ferror(secret_file)) {
                             secret_debug("[error]Secret file read error!");
-                            error_code = -10;
+                            error_code = -12;
                             goto EXCEPTION;
                         }
                     } else {
@@ -962,16 +948,6 @@ int write_image(const char *image_input_file,
 
     png_write_end(write_ptr, write_end_info_ptr);
 
-#ifdef PNG_EASY_ACCESS_SUPPORTED
-    if (verbose != 0)
-    {
-        png_uint_32 iwidth, iheight;
-        iwidth = png_get_image_width(write_ptr, write_info_ptr);
-        iheight = png_get_image_height(write_ptr, write_info_ptr);
-        fprintf(STDERR, "\n Image width = %lu, height = %lu\n", iwidth, iheight);
-    }
-#endif
-
     secret_debug("destroying row_buf for read_ptr");
     png_free(read_ptr, row_buf);
     row_buf = NULL;
@@ -997,4 +973,14 @@ int write_image(const char *image_input_file,
 #endif
 
     return secret_write;
+}
+
+int read_image_secretly(const char *image_file, secret *se) {
+
+}
+
+int write_image_secretly(const char *image_input_file,
+                         const char *image_output_file,
+                         secret *se, size_t min_size) {
+
 }

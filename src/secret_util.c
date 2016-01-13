@@ -3,7 +3,35 @@
 //
 
 #include <stddef.h>
+#include <stdio.h>
+#include "png.h"
 #include "secret_util.h"
+
+#define PNG_BYTES_TO_CHECK 4
+
+int check_png(char *file_path) {
+    FILE *file = fopen(file_path, "rb");
+    int result = check_png2(file);
+    if (file)
+        fclose(file);
+    return result;
+}
+
+int check_png2(FILE *file) {
+    png_byte buf[PNG_BYTES_TO_CHECK];
+    if (file == NULL)
+        return 0;
+    rewind(file);
+    if (fread(buf, 1, PNG_BYTES_TO_CHECK, file) != PNG_BYTES_TO_CHECK) {
+        rewind(file);
+        return 0;
+    }
+    // 对比文件前4个magic字节
+    int result = !png_sig_cmp(buf, 0, PNG_BYTES_TO_CHECK);
+    // 将文件指针指回文件开头，不影响后续libpng对文件的操作
+    rewind(file);
+    return result;
+}
 
 char adam7_row_interval[7] = {8, 8, 4, 4, 2, 2, 1};
 char adam7_row_offset[7] = {0, 4, 0, 2, 0, 1, 0};
@@ -59,4 +87,3 @@ size_t get_adam7_byte_size(size_t row_byte, int pass, unsigned char color_type) 
     int offset = adam7_row_offset[pass];
     return (real_size - offset + interval - 1) / interval * color_byte;// 除法向上取整
 }
-
