@@ -4,29 +4,29 @@
 
 #include "secret_hider.h"
 
-char mask[8] = {-128, 64, 32, 16, 8, 4, 2, 1};// 用于提取byte中的每个bit
+static unsigned char mask[8] = {128, 64, 32, 16, 8, 4, 2, 1};// 用于提取byte中的每个bit
 
-unsigned char to_odd(unsigned char data) {
+static unsigned char to_odd(unsigned char data) {
     return data & 0x01 ? data : (unsigned char) ((data < 127) ? data + 1 : data - 1);
 }
 
-unsigned char to_even(unsigned char data) {
+static unsigned char to_even(unsigned char data) {
     return data & 0x01 ? (unsigned char) ((data < 127) ? data + 1 : data - 1) : data;
 }
 
-size_t contains_secret_bytes(size_t data_size) {
+size_t secret_contains_bytes(size_t data_size) {
     return data_size / 8;
 }
 
-int write_secret_to_data(unsigned char *data_p, int data_offset, size_t data_size,
-                         char *secret_p, int secret_offset, size_t secret_size,
-                         remainder *remain, filter* f) {
+int secret_hide(unsigned char *data_p, int data_offset, size_t data_size,
+                unsigned char *secret_p, int secret_offset, size_t secret_size,
+                secret_remainder *remain, secret_filter *filter) {
     if (!data_p || data_size <= 0) {
         return -1;
     }
     size_t remain_size = remain ? remain->size : 0;
-    size_t total_real_size = f && f->get_effective_size ?
-                             f->get_effective_size(data_size, f->param) + remain_size :
+    size_t total_real_size = filter && filter->get_effective_size ?
+                             filter->get_effective_size(data_size, filter->param) + remain_size :
                              data_size + remain_size;// 总的有效字节数
     size_t round_real_size = total_real_size >> 3 << 3;// 能被8整除的最大有效字节数，大于此值的字节将存入remain中
     // 奇偶编码法。每个字节的data，奇数值代表1，偶数值代表0，即一个字节的data能存储1bit的信息
@@ -35,10 +35,10 @@ int write_secret_to_data(unsigned char *data_p, int data_offset, size_t data_siz
     size_t write_secret_size = 0;// 已写入的secret字节数
     int bit_index = remain_size;
     unsigned char data_byte;
-    char tmp_bit;
+    unsigned char tmp_bit;
     int i;
     for (i = data_offset; i < data_size; i++) {
-        if (f && f->is_effective && !(f->is_effective(i, f->param))) {
+        if (filter && filter->is_effective && !(filter->is_effective(i, filter->param))) {
             continue;
         }
         data_byte = data_p[i];
@@ -81,24 +81,24 @@ int write_secret_to_data(unsigned char *data_p, int data_offset, size_t data_siz
     return write_secret_size;
 }
 
-int read_secret_from_data(unsigned char *data_p, int data_offset, size_t data_size,
-                          char *secret_p, int secret_offset, size_t secret_size,
-                          remainder *remain, filter* f) {
+int secret_dig(unsigned char *data_p, int data_offset, size_t data_size,
+               unsigned char *secret_p, int secret_offset, size_t secret_size,
+               secret_remainder *remain, secret_filter *filter) {
     if (!data_p || data_size <= 0) {
         return -1;
     }
     size_t remain_size = remain ? remain->size : 0;
     size_t total_data_size = data_size + remain_size;
-    size_t total_real_size = f && f->get_effective_size ?
-                             f->get_effective_size(data_size, f->param) + remain_size :
+    size_t total_real_size = filter && filter->get_effective_size ?
+                             filter->get_effective_size(data_size, filter->param) + remain_size :
                              data_size + remain_size;// 总的有效字节数
     size_t round_real_size = total_real_size >> 3 << 3;// 能被8整除的最大有效字节数，大于此值的字节将存入remain中
     // 奇偶解码法。每个字节的data，奇数值代表1，偶数值代表0，即一个字节的data能隐藏1bit的信息
     // bit流存储方式是，big-endian大端字节序，即优先存储一个字节的最高有效位
     size_t read_data_size = 0;// 已读取的有效字节数
     size_t read_secret_size = 0;// 已解析的secret字节数
-    char tmp_byte = 0;
-    char tmp_bit = 0;
+    unsigned char tmp_byte = 0;
+    unsigned char tmp_bit = 0;
     int bit_loc;
     unsigned char data_byte;
     size_t i;
@@ -113,7 +113,7 @@ int read_secret_from_data(unsigned char *data_p, int data_offset, size_t data_si
         if (i < remain_size) {
             data_byte = remain->data[i];
         } else {
-            if (f && f->is_effective && !(f->is_effective(i - remain_size + data_offset, f->param))) {
+            if (filter && filter->is_effective && !(filter->is_effective(i - remain_size + data_offset, filter->param))) {
                 continue;
             }
             data_byte = data_p[i - remain_size + data_offset];
@@ -122,7 +122,7 @@ int read_secret_from_data(unsigned char *data_p, int data_offset, size_t data_si
             // 解析remain+data中的secret信息
 //            fprintf(STDERR, "[%d]\t", data_byte);
             bit_loc = read_data_size % 8;
-            tmp_bit = (char) (data_byte & 0x01);
+            tmp_bit = (unsigned char) (data_byte & 0x01);
             tmp_byte = tmp_byte | (tmp_bit << (7 - bit_loc));
             if (bit_loc == 7) {
                 secret_p[secret_offset + read_secret_size] = tmp_byte;

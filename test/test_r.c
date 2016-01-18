@@ -6,20 +6,20 @@
 #include "secret_image.h"
 
 void test_mem(const char *r_inname, size_t secret_size) {
-    secret *se = create_secret();
+    secret *se = secret_create(0);
     se->size = secret_size;
-    int r_result = read_image_directly(r_inname, se);
+    int r_result = secret_image_dig(r_inname, se);
     printf(">>>read result=%d, read content=%s\n", r_result, se->data);
-    free_secret(se);
+    secret_destroy(se);
 }
 
 void test_file(const char *r_inname, size_t secret_size) {
-    secret *se = create_secret();
+    secret *se = secret_create(0);
     se->size = secret_size;
     se->file_path = "H:\\img_test\\secret\\result1.txt";
-    int r_result = read_image_directly(r_inname, se);
+    int r_result = secret_image_dig(r_inname, se);
     printf(">>>read result=%d, read content=%s\n", r_result, se->data);
-    free_secret(se);
+    secret_destroy(se);
 }
 
 int main(int argc, char *argv[]) {
