@@ -11,12 +11,17 @@
  * 获取指定图片文件能包含的最大secret字节大小。
  * @param image_file 图片文件的绝对路径(非空)。
  * @param has_meta 是否计算meta信息大小(计算则设为1，否则设为0)
- * @param has_key meta是否包含key字段(包含则设为1，否则设为0)
- * @return 返回指定图片文件能包含的最大secret字节大小。
+ * @return 返回指定图片文件能包含的最大secret字节大小；获取失败返回0。
  */
-size_t secret_image_volume(const char *image_file,
-                         int has_meta, int has_key);
+size_t secret_image_volume(const char *image_file, int has_meta);
 
+/**
+ * 获取指定文件的secret的meta信息。
+ * @param image_file 图片文件的绝对路径(非空)。
+ * @param result 获取的meta信息结果存放在secret结构体中。
+ * @return 获取成功返回非0；获取失败返回0。
+ */
+int secret_image_meta(const char *image_file, secret *result);
 
 /**
  * 从指定的图片文件中提取secret信息。
@@ -31,19 +36,19 @@ size_t secret_image_volume(const char *image_file,
  * secret信息会全部提取，并将实际提取的secret字节数赋值到size变量。
  * @param image_file 图片文件的绝对路径(非空)。
  * @param se secret结构体，表示secret信息(非空)。
- * @return 如果提取成功，返回提取secret信息的字节数(大于等于0)；
- * 如果提取失败，返回对应的错误码(小于0)：
- *      -1：传入参数为空或非法；
- *      -2：secret文件写方式打开失败；
- *      -3：图片文件读方式打开失败；
- *      -4：图片文件格式错误，不是PNG；
- *      -5：图片文件读操作出错；
- *      -6：图片interlace属性不合法，无法解析；
- *      -7：图片color_type属性不合法，无法解析；
- *      -8：图片能包含的最大secret字节数小于要求的期望字节数；
- *      -9：secret存储为文件时出错；
- *      -10：meta信息格式出错
- *      -11：crc校验失败
+ * @return 如果提取成功，返回提取secret信息的字节数(包含meta信息和crc校验码,大于等于0)；
+ *         如果提取失败，返回对应的错误码(小于0)：
+ *          -1：传入参数为空或非法；
+ *          -2：图片文件读方式打开失败；
+ *          -3：图片文件格式错误，不是PNG；
+ *          -4：图片文件读操作出错；
+ *          -5：图片interlace属性不合法，无法解析；
+ *          -6：图片color_type属性不合法，无法解析；
+ *          -7：图片能包含的最大secret字节数小于要求的期望字节数；
+ *          -8：secret文件写方式打开失败；
+ *          -9：secret存储为文件时出错；
+ *          -10：meta信息格式出错
+ *          -11：crc校验失败
  */
 int secret_image_dig(const char *image_file, secret *se);
 
@@ -58,20 +63,22 @@ int secret_image_dig(const char *image_file, secret *se);
  * @param se secret结构体，表示secret信息(非空)。
  * @param min_size 最小写入字节数。如果该值小于等于0，表示没有最小写入字节数限制，
  * 能写入多少secret信息就写入多少，否则表示至少写入指定字节数的secret信息。
- * @return 如果写入成功，返回写入secret信息的字节数(大于等于0)；
- * 如果写入失败，返回对应的错误码(小于0)：
- *      -1：传入参数为空或非法；
- *      -2：secret文件读方式打开失败；
- *      -3：输入图片文件读方式打开失败；
- *      -4：输入图片文件格式错误，不是PNG；
- *      -5：输出图片文件写方式打开失败；
- *      -6：输入图片文件读操作出错；
- *      -7：输出图片文件写操作出错；
- *      -8：输入图片interlace属性不合法，无法解析；
- *      -9：输入图片color_type属性不合法，无法解析；
- *      -10：输入图片能包含的最大字节数无法满足secret大小；
- *      -11：secret文件大小为0；
- *      -12：secret文件读操作出错；
+ * @return 如果写入成功，返回写入secret信息的字节数(包含meta信息和crc校验码,大于等于0)；
+ *         如果写入失败，返回对应的错误码(小于0)：
+ *          -1：传入参数为空或非法；
+ *          -2：secret文件读方式打开失败；
+ *          -3：输入图片文件读方式打开失败；
+ *          -4：输入图片文件格式错误，不是PNG；
+ *          -5：输出图片文件写方式打开失败；
+ *          -6：输入图片文件读操作出错；
+ *          -7：输出图片文件写操作出错；
+ *          -8：输入图片interlace属性不合法，无法解析；
+ *          -9：输入图片color_type属性不合法，无法解析；
+ *          -10：输入图片能包含的最大字节数无法满足secret大小；
+ *          -11：secret文件大小为0；
+ *          -12：secret文件读操作出错；
+ *          -13：meta信息创建失败；
+ *          -14：crc计算出错；
  */
 int secret_image_hide(const char *image_input_file,
                       const char *image_output_file,

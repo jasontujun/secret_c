@@ -10,14 +10,6 @@
 #include "secret_hider.h"
 #include "secret_util.h"
 
-#ifndef min
-#define min(a,b) ((a)<(b)?(a):(b))
-#endif
-
-#ifndef max
-#define max(a,b) ((a)>(b)?(a):(b))
-#endif
-
 #ifndef PNG_DEBUG
 #  define PNG_DEBUG 2
 #endif
@@ -98,7 +90,7 @@ PNGCBAPI png_debug_malloc(png_structp png_ptr, png_alloc_size_t size)
         memset(pinfo->pointer, 0xdd, pinfo->size);
 
         secret_debug2("[png_debug_free]png_malloc %lu bytes at %p", (unsigned long)size,
-               pinfo->pointer);
+                      pinfo->pointer);
 
         return (png_voidp)(pinfo->pointer);
     }
@@ -183,34 +175,48 @@ static size_t wrapper_get_effective_size(size_t data_size, void *param) {
 // ========================== secret_filter的相关参数[end] ========================== //
 
 
-typedef struct _read_callback_param {
-    int check_tag;
-    int check_meta;
-    int check_crc;
-    secret_meta *meta;
-} read_callback_param;
+// ========================== dig过程中的回调函数[start] ========================== //
+typedef struct _parse_meta_param {
+    int parse_result;// 解析结果：0表示未解析，1表示解析成功，-1表示解析失败
+    secret *se;
+    multi_data_source *ds;
+    size_t *secret_total_size;
+    size_t max_secret_size;
+} parse_meta_param;
 
-static int secret_read_callback(unsigned char *secret_buf, size_t secret_buf_size,
-                                size_t cur_secret_size, void *param) {
-    read_callback_param *p = param;
-    if (!(p->check_tag)) {
-        if (cur_secret_size < 2) {
-            return 0;
+// 在解析实际secret的meta部分完成后的回调函数，解析meta的内容。
+static void wrapper_dig_parse_meta(void *data, long size, void *param) {
+    parse_meta_param *meta_param = param;
+    if (secret_get_meta(data, (size_t) size, meta_param->se) > 0) {
+        // 取得真正的data数据大小后，验证一下是否超越了容量上限
+        if (meta_param->se->size + SECRET_META_LENGTH + SECRET_CRC_LENGTH > meta_param->max_secret_size
+            || meta_param->se->size < 0) {
+            secret_debug1("[secret_image_dig]Meta error2! meta size incorrect! size=%d", meta_param->se->size);
+            meta_param->parse_result = -1;
+            return;
         }
-        if (secret_check_meta(secret_buf, secret_buf_size)) {
-            p->check_tag = 1;
-        } else {
-            return -20;
-        }
-    } else if (!(p->check_meta)) {
-
-    } else if (!(p->check_crc)) {
-
+        secret_debug1("[secret_image_dig]Meta success! data size = %d", meta_param->se->size);
+        meta_param->parse_result = 1;
+        // 更新secret的data部分大小和总大小
+        meta_param->ds->resize(meta_param->ds, 1, (long) meta_param->se->size);
+        *(meta_param->secret_total_size) = meta_param->se->size + SECRET_META_LENGTH + SECRET_CRC_LENGTH;
+    } else {
+        secret_debug("[secret_image_dig]Meta error!");
+        meta_param->parse_result = -1;
     }
-    return 0;
 }
 
-size_t secret_image_volume(const char *image_file, int has_meta, int has_key) {
+// 在解析实际secret的data部分过程中的回调函数，计算crc校验码，最后用来比对
+static void wrapper_dig_cal_crc(void *data, size_t size, void *param) {
+    unsigned char *d = data;
+    secret *se = param;
+    se->meta->crc = secret_cal_crc2(se->meta->crc, d, size);
+}
+
+// ========================== dig过程中的回调函数[start] ========================== //
+
+
+size_t secret_image_volume(const char *image_file, int has_meta) {
     if (!image_file) {
         return 0;
     }
@@ -259,25 +265,25 @@ size_t secret_image_volume(const char *image_file, int has_meta, int has_key) {
     png_byte bit_depth = png_get_bit_depth(read_ptr,read_info_ptr);
     png_byte color_type = png_get_color_type(read_ptr,read_info_ptr);
     png_byte interlace_type = png_get_interlace_type(read_ptr,read_info_ptr);
-    png_byte compression_type = png_get_compression_type(read_ptr,read_info_ptr);
-    png_byte filter_type = png_get_filter_type(read_ptr,read_info_ptr);
     secret_debug1("[secret_image_volume]image width %d", width);
     secret_debug1("[secret_image_volume]image height %d", height);
     secret_debug1("[secret_image_volume]image bit_depth %d", bit_depth);
     secret_debug1("[secret_image_volume]image color_type %d", color_type);
     secret_debug1("[secret_image_volume]image interlace_type %d", interlace_type);
-    secret_debug1("[secret_image_volume]image compression_type %d", compression_type);
-    secret_debug1("[secret_image_volume]image filter_type %d", filter_type);
 
     size_t max_secret_size = secret_contains_bytes(width * height * get_color_bytes(color_type));
     if (has_meta) {
-        max_secret_size = has_key ? max(max_secret_size, 24) - 24 : max(max_secret_size, 8) - 8;
+        max_secret_size = max(max_secret_size, SECRET_META_LENGTH) - SECRET_META_LENGTH;
     }
 
     png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
     fclose(fpin);
 
     return max_secret_size;
+}
+
+int secret_image_meta(const char *image_file, secret *result) {
+    return 0;
 }
 
 int secret_image_dig(const char *image_file, secret *se) {
@@ -287,30 +293,28 @@ int secret_image_dig(const char *image_file, secret *se) {
 
     /* "static" prevents setjmp corruption */
     static png_FILE_p fpin;
-    static FILE * secret_file = NULL;
     png_structp read_ptr;
     png_infop read_info_ptr;
 
+    static FILE * secret_file = NULL;// secret存储的文件
+    unsigned char *secret_memory = NULL;// secret存储的内存空间
+
     int num_pass = 1, pass;
     png_bytep row_buf = NULL;// 一行像素的缓冲区
-    unsigned char *secret_buf = NULL;// 表示全部都在内存的secret数据区，也可能是secret存入文件的缓冲区
-
-    if (se->file_path) {
-        if ((secret_file = fopen(se->file_path, "wb")) == NULL) {
-            secret_debug1("[secret_image_dig]Could not find secret file %s", se->file_path);
-            return -2;
-        }
-    }
+    unsigned char *secret_buf = NULL;// secret提取过程的缓冲区
+    unsigned char *meta_buf = NULL;// meta信息的缓冲区
+    unsigned char *crc_buf = NULL;// crc字节的缓冲区
+    multi_data_source *ds = NULL;// 多重数据源
 
     if ((fpin = fopen(image_file, "rb")) == NULL) {
         secret_debug1("[secret_image_dig]Could not find input file %s", image_file);
-        return -3;
+        return -2;
     }
 
     if (!check_png2(fpin)) {
         secret_debug1("[secret_image_dig]Not PNG file %s", image_file);
         fclose(fpin);
-        return -4;
+        return -3;
     }
 
     secret_debug("[secret_image_dig]Allocating read structures");
@@ -333,16 +337,20 @@ int secret_image_dig(const char *image_file, secret *se) {
         if (secret_file) {
             fclose(secret_file);
         }
+        free(secret_memory);
         free(secret_buf);
+        free(meta_buf);
+        free(crc_buf);
+        destroy_multi_data_source(ds);
         return error_code;
     }
-        // ================== 统一出错处理代码[end] ================== //
+    // ================== 统一出错处理代码[end] ================== //
 
 #ifdef PNG_SETJMP_SUPPORTED
     secret_debug("[secret_image_dig]Setting jmpbuf for read struct");
     if (setjmp(png_jmpbuf(read_ptr))) {
         secret_debug1("[secret_image_dig]%s: libpng read error", image_file);
-        error_code = -5;
+        error_code = -4;
         goto EXCEPTION;
     }
 #endif
@@ -361,52 +369,95 @@ int secret_image_dig(const char *image_file, secret *se) {
     png_byte bit_depth = png_get_bit_depth(read_ptr,read_info_ptr);
     png_byte color_type = png_get_color_type(read_ptr,read_info_ptr);
     png_byte interlace_type = png_get_interlace_type(read_ptr,read_info_ptr);
-    png_byte compression_type = png_get_compression_type(read_ptr,read_info_ptr);
-    png_byte filter_type = png_get_filter_type(read_ptr,read_info_ptr);
     secret_debug1("[secret_image_dig]image width %d", width);
     secret_debug1("[secret_image_dig]image height %d", height);
     secret_debug1("[secret_image_dig]image bit_depth %d", bit_depth);
     secret_debug1("[secret_image_dig]image color_type %d", color_type);
     secret_debug1("[secret_image_dig]image interlace_type %d", interlace_type);
-    secret_debug1("[secret_image_dig]image compression_type %d", compression_type);
-    secret_debug1("[secret_image_dig]image filter_type %d", filter_type);
 
 #ifdef PNG_READ_INTERLACING_SUPPORTED
     num_pass = png_set_interlace_handling(read_ptr);
     if (num_pass != 1 && num_pass != 7) {
         secret_debug1("[secret_image_dig]Image interlace_pass error!! interlace_pass=%d, cannot hide secret!", num_pass);
-        error_code = -6;
+        error_code = -5;
         goto EXCEPTION;
     }
 #endif
 
+    // 计算该图片的secret最大容量
     const size_t max_secret_size = secret_contains_bytes(width * height * get_color_bytes(color_type));
     if (max_secret_size == 0) {
         secret_debug1("[secret_image_dig]Image color_type error!! color_type=%d, cannot hide secret!", color_type);
-        error_code = -7;
+        error_code = -6;
         goto EXCEPTION;
     }
-
-    const size_t expect_size = se->size;
-    if (expect_size > 0 && max_secret_size < expect_size) {
-        secret_debug1("[secret_image_dig]Max secret size less then %d!", expect_size);
-        error_code = -8;
-        goto EXCEPTION;
+    // 初步计算secret的字节大小(meta和crc也计算在内，后面会根据meta信息修正这个值)
+    size_t secret_total_size;
+    if (se->meta) {
+        // 带meta格式的提取，忽略外部指定的size字段
+        const size_t min_secret_size = SECRET_META_LENGTH + SECRET_CRC_LENGTH;// 如果计算meta，secret容量最小值为24+4
+        if (max_secret_size < min_secret_size) {
+            secret_debug1("[secret_image_dig]Max secret size less then min size: %d!", min_secret_size);
+            error_code = -7;
+            goto EXCEPTION;
+        }
+        secret_total_size = max_secret_size;
+    } else {
+        // 不带meta格式的提取，会参考外部指定的size字段
+        if (se->size > 0 && max_secret_size < se->size) {
+            secret_debug1("[secret_image_dig]Max secret size less then given size: %d!", se->size);
+            error_code = -7;
+            goto EXCEPTION;
+        }
+        secret_total_size = se->size > 0 ? se->size : max_secret_size;
     }
-
+    // 创建row缓冲区
     png_size_t row_buf_size = png_get_rowbytes(read_ptr, read_info_ptr);
     row_buf = (png_bytep)png_malloc(read_ptr, row_buf_size);
     secret_debug1("[secret_image_dig]Allocating row buffer...row_buf_size = %d", row_buf_size);
-
     // 创建secret缓存区
-    const size_t real_size = expect_size <= 0 ? max_secret_size : expect_size;// 待提取的secret字节数
-    const size_t secret_buf_size = se->file_path ? // secret缓冲区大小
-                                   (secret_contains_bytes(row_buf_size) + 2) : // 考虑到余数，必须再加2！
-                                   real_size;
-    int secret_offset = 0;
+    const size_t secret_buf_size = secret_contains_bytes(row_buf_size) + 2;// 为一行的最大secret数，考虑到余数，必须再加2！
     secret_buf = malloc(secret_buf_size);
     secret_debug1("[secret_image_dig]Allocating secret buffer...secret_size = %d", secret_buf_size);
-
+    // 创建多重数据源
+    data_source *secret_meta_ds;// 创建secret的meta数据源
+    data_source *secret_data_ds;// 创建secret内容数据源
+    data_source *secret_crc_ds;// 创建secret的crc数据源
+    parse_meta_param meta_param;
+    if (se->file_path) {
+        if ((secret_file = fopen(se->file_path, "wb")) == NULL) {
+            secret_debug1("[secret_image_dig]Could not find secret file %s", se->file_path);
+            return -8;
+        }
+        secret_data_ds = create_file_data_source(secret_file, (long) secret_total_size);
+    } else {
+        secret_memory = malloc(secret_total_size);
+        secret_data_ds = create_memory_data_source(secret_memory, (long) secret_total_size);
+    }
+    if (se->meta) {
+        meta_buf = malloc(SECRET_META_LENGTH);
+        crc_buf = malloc(SECRET_CRC_LENGTH);
+        se->meta->crc = secret_cal_crc2(0L, NULL, 0);
+        secret_meta_ds = create_memory_data_source(meta_buf, SECRET_META_LENGTH);
+        secret_crc_ds = create_memory_data_source(crc_buf, SECRET_CRC_LENGTH);
+        data_source *source_list[3] = {secret_meta_ds, secret_data_ds, secret_crc_ds};
+        ds = create_multi_data_source(source_list, 3);
+        // 设置相关meta信息的处理和crc校验
+        parse_meta_param tmp_meta_param = {
+                .se = se,
+                .parse_result = 0,
+                .ds = ds,
+                .secret_total_size = &secret_total_size,
+                .max_secret_size = max_secret_size
+        };
+        meta_param = tmp_meta_param;
+        secret_meta_ds->set_write_full_callback(secret_meta_ds, &tmp_meta_param, wrapper_dig_parse_meta);
+        secret_data_ds->set_write_callback(secret_data_ds, se, wrapper_dig_cal_crc);
+    } else {
+        data_source *source_list[1] = {secret_data_ds};
+        ds = create_multi_data_source(source_list, 1);
+    }
+    // 定义remainder和filter回调
     secret_remainder remain = {
             .size = 0
     };
@@ -418,11 +469,10 @@ int secret_image_dig(const char *image_file, secret *se) {
             .is_effective = wrapper_is_effective,
             .get_effective_size = wrapper_get_effective_size
     };
+    // 逐行解析图片
     int y;
-    int read_result;
-    int callback_result = 0;
-    size_t secret_save_result;
-    size_t secret_read = 0;
+    int dig_result;
+    size_t secret_total_read = 0;
     for (pass = 0; pass < num_pass; pass++) {
         secret_debug1("[secret_image_dig]Reading row data for pass %d", pass);
         for (y = 0; y < height; y++) {
@@ -431,45 +481,43 @@ int secret_image_dig(const char *image_file, secret *se) {
             if (!row_is_adam7(y, num_pass > 1 ? pass : -1)) {
                 continue;
             }
+            // 如果是adam7有效行，提取secret
             param.pass = num_pass > 1 ? pass : -1;
-            read_result = secret_dig(row_buf, 0, row_buf_size,
-                                     secret_buf, secret_offset,
-                                     se->file_path ? min(secret_buf_size, real_size - secret_read)
-                                                   : real_size - secret_offset,
+            dig_result = secret_dig(row_buf, 0, row_buf_size,
+                                     secret_buf, 0, min(secret_buf_size, secret_total_size - secret_total_read),
                                      &remain, &filter);
-            if (read_result > 0) {
-                secret_read += read_result;
-//                if (callback && callback_result == 0) {
-//                    callback_result = callback(secret_buf, (size_t) read_result, secret_read, callback_param);
-//                    if (callback_result < 0) {
-//                        secret_debug1("[secret_image_dig]callback return error! return=%d", callback_result);
-//                        error_code = callback_result;
-//                        goto EXCEPTION;
-//                    }
-//                }
-                // 将提取的secret写入文件或保存到内存
-                if (se->file_path) {
-                    secret_save_result = fwrite(secret_buf, (size_t) read_result, 1, secret_file);
-                    if (secret_save_result < 1 && ferror(secret_file)) {
-                        secret_debug1("[secret_image_dig]%s: secret file write error", se->file_path);
-                        error_code = -9;
+            if (dig_result > 0) {
+                secret_total_read += dig_result;
+                if (ds->write(ds, (size_t) dig_result, secret_buf) < dig_result) {
+                    secret_debug1("[secret_image_dig]%s: secret save error!", se->file_path);
+                    error_code = -9;
+                    goto EXCEPTION;
+                }
+                // meta信息解析失败
+                if (se->meta && meta_param.parse_result < 0) {
+                    if (meta_param.parse_result == -1) {
+                        error_code = -10;
                         goto EXCEPTION;
                     }
-                } else {
-                    secret_offset = secret_read;
                 }
-                // 读取的secret内容已满，达到指定的长度，退出循环
-                if (secret_read >= real_size) {
+                // 读取的secret内容已达到指定的长度，退出循环
+                if (secret_total_read >= secret_total_size) {
+                    // 验证crc校验码是否一致
+                    if (se->meta) {
+                        if (secret_check_crc(se->meta->crc, crc_buf)) {
+                            secret_debug("[secret_image_dig]CRC error!");
+                            error_code = -11;
+                            goto EXCEPTION;
+                        }
+                    }
                     secret_debug("[secret_image_dig]Parse secret finish!!");
-                    break;
+                    goto FINISH;
                 }
             }
         }
-        if (secret_read >= real_size) {// 读取的secret内容已满，达到指定的长度，退出循环
-            break;
-        }
     }
 
+    FINISH:
     secret_debug("[secret_image_dig]Destroying row_buf for read_ptr");
     png_free(read_ptr, row_buf);
     row_buf = NULL;
@@ -478,12 +526,17 @@ int secret_image_dig(const char *image_file, secret *se) {
     fclose(fpin);
     if (secret_file) {
         fclose(secret_file);
-        free(secret_buf);// secret已存进文件，清空缓冲区
-    } else {
-        se->data = secret_buf;// secret已存入内存中
     }
-    se->size = secret_read;
-    return secret_read;
+    free(secret_buf);
+    free(meta_buf);
+    free(crc_buf);
+    if (!se->file_path) {
+        se->data = secret_memory;
+    }
+    if (!se->meta) {
+        se->size = secret_total_size;
+    }
+    return secret_total_size;
 }
 
 int secret_image_hide(const char *image_input_file,
@@ -506,11 +559,13 @@ int secret_image_hide(const char *image_input_file,
     png_structp write_ptr;
     png_infop write_info_ptr, write_end_info_ptr;
     int interlace_preserved = 1;
-    size_t real_size;// secret真正的字节大小
 
     png_bytep row_buf = NULL;
     int num_pass = 1, pass;
-    unsigned char *secret_buf = NULL;// 表示全部都在内存的secret数据区，也可能是secret存入文件的缓冲区
+    unsigned char *secret_buf = NULL;// secret缓冲区
+    unsigned char *meta_buf = NULL;// meta数据区
+    unsigned char *crc_buf = NULL;// crc数据区
+    multi_data_source *ds = NULL;// 多重数据源
 
     if (se->file_path) {
         if ((secret_file = fopen(se->file_path, "rb")) == NULL) {
@@ -538,7 +593,7 @@ int secret_image_hide(const char *image_input_file,
         return -5;
     }
 
-    secret_debug("Allocating read and write structures");
+    secret_debug("[secret_image_hide]Allocating read and write structures");
 #if defined(PNG_USER_MEM_SUPPORTED) && PNG_DEBUG
     read_ptr = png_create_read_struct_2(PNG_LIBPNG_VER_STRING, NULL,
                                         NULL, NULL, NULL, png_debug_malloc, png_debug_free);
@@ -553,7 +608,7 @@ int secret_image_hide(const char *image_input_file,
     write_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
 #endif
 
-    secret_debug("Allocating read_info, write_info and end_info structures");
+    secret_debug("[secret_image_hide]Allocating read_info, write_info and end_info structures");
     read_info_ptr = png_create_info_struct(read_ptr);
     end_info_ptr = png_create_info_struct(read_ptr);
     write_info_ptr = png_create_info_struct(write_ptr);
@@ -561,7 +616,8 @@ int secret_image_hide(const char *image_input_file,
 
     // =============== 统一出错处理代码[start] =============== //
     int error_code = 0;
-    EXCEPTION: if (error_code != 0) {
+    EXCEPTION:
+    if (error_code != 0) {
         png_free(read_ptr, row_buf);
         row_buf = NULL;
         png_destroy_read_struct(&read_ptr, &read_info_ptr, &end_info_ptr);
@@ -572,19 +628,20 @@ int secret_image_hide(const char *image_input_file,
         if (secret_file) {
             fclose(secret_file);
         }
+        free(secret_buf);
+        free(meta_buf);
+        free(crc_buf);
+        destroy_multi_data_source(ds);
         return error_code;
     }
     // =============== 统一出错处理代码[end] =============== //
 
 #ifdef PNG_SETJMP_SUPPORTED
-    secret_debug("Setting jmpbuf for read struct");
     if (setjmp(png_jmpbuf(read_ptr))) {
         secret_debug2("[secret_image_hide]%s -> %s: libpng read error", image_input_file, image_output_file);
         error_code = -6;
         goto EXCEPTION;
     }
-
-    secret_debug("Setting jmpbuf for write struct");
     if (setjmp(png_jmpbuf(write_ptr))) {
         secret_debug2("[secret_image_hide]%s -> %s: libpng write error", image_input_file, image_output_file);
         error_code = -7;
@@ -596,7 +653,7 @@ int secret_image_hide(const char *image_input_file,
     png_set_benign_errors(read_ptr, 1);
     png_set_benign_errors(write_ptr, 1);
 
-    secret_debug("Initializing input and output streams");
+    secret_debug("[secret_image_hide]Initializing input and output streams");
 #ifdef PNG_STDIO_SUPPORTED
     png_init_io(read_ptr, fpin);
     png_init_io(write_ptr, fpout);
@@ -614,14 +671,6 @@ int secret_image_hide(const char *image_input_file,
     png_set_read_status_fn(read_ptr, NULL);
 
 #ifdef PNG_SET_UNKNOWN_CHUNKS_SUPPORTED
-    /* Preserve all the unknown chunks, if possible.  If this is disabled then,
-     * even if the png_{get,set}_unknown_chunks stuff is enabled, we can't use
-     * libpng to *save* the unknown chunks on read (because we can't switch the
-     * save option on!)
-     *
-     * Notice that if SET_UNKNOWN_CHUNKS is *not* supported read will discard all
-     * unknown chunks and write will write them all.
-     */
 #ifdef PNG_SAVE_UNKNOWN_CHUNKS_SUPPORTED
     png_set_keep_unknown_chunks(read_ptr, PNG_HANDLE_CHUNK_ALWAYS, NULL, 0);
 #endif
@@ -630,7 +679,7 @@ int secret_image_hide(const char *image_input_file,
 #endif
 #endif
 
-    secret_debug("Reading info struct");
+    secret_debug("[secret_image_hide]Reading info struct");
     png_read_info(read_ptr, read_info_ptr);
 
     png_uint_32 width = png_get_image_width(read_ptr,read_info_ptr);
@@ -638,59 +687,64 @@ int secret_image_hide(const char *image_input_file,
     png_byte bit_depth = png_get_bit_depth(read_ptr,read_info_ptr);
     png_byte color_type = png_get_color_type(read_ptr,read_info_ptr);
     png_byte interlace_type = png_get_interlace_type(read_ptr,read_info_ptr);
-    png_byte compression_type = png_get_compression_type(read_ptr,read_info_ptr);
-    png_byte filter_type = png_get_filter_type(read_ptr,read_info_ptr);
-    secret_debug1("image width %d", width);
-    secret_debug1("image height %d", height);
-    secret_debug1("image bit_depth %d", bit_depth);
-    secret_debug1("image color_type %d", color_type);
-    secret_debug1("image interlace_type %d", interlace_type);
-    secret_debug1("image compression_type %d", compression_type);
-    secret_debug1("image filter_type %d", filter_type);
+    secret_debug1("[secret_image_hide]image width %d", width);
+    secret_debug1("[secret_image_hide]image height %d", height);
+    secret_debug1("[secret_image_hide]image bit_depth %d", bit_depth);
+    secret_debug1("[secret_image_hide]image color_type %d", color_type);
+    secret_debug1("[secret_image_hide]image interlace_type %d", interlace_type);
 
 #ifdef PNG_READ_INTERLACING_SUPPORTED
     num_pass = png_set_interlace_handling(read_ptr);
     if (num_pass != 1 && num_pass != 7) {
-        secret_debug1("Image interlace_pass error!! interlace_pass=%d, cannot hide secret!", num_pass);
+        secret_debug1("[secret_image_hide]Image interlace_pass error!! interlace_pass=%d, cannot hide secret!", num_pass);
         error_code = -8;
         goto EXCEPTION;
     }
 #endif
 
+    // 计算该图片的secret最大容量
     size_t max_secret_size = secret_contains_bytes(width * height * get_color_bytes(color_type));
     if (max_secret_size == 0) {
-        secret_debug1("Image color_type error!! color_type=%d, cannot hide secret!", color_type);
+        secret_debug1("[secret_image_hide]Image color_type error!! color_type=%d, cannot hide secret!", color_type);
         error_code = -9;
         goto EXCEPTION;
     }
-
+    size_t min_secret_size = 0;
+    if (se->meta) {// 如果计算meta，secret容量最小值为24+4
+        min_secret_size = SECRET_META_LENGTH + SECRET_CRC_LENGTH;
+        if (max_secret_size < min_secret_size) {
+            secret_debug1("[secret_image_hide]Max secret size less then min size: %d!", min_secret_size);
+            error_code = -10;
+            goto EXCEPTION;
+        }
+    }
+    // 计算secret的字节大小(如果带meta格式的，meta和crc也计算在内)
     if (se->file_path) {
-        // 获得文件大小
+        // 如果secret是以文件存储的，先获得文件大小
         fseek(secret_file, 0, SEEK_END);
-        real_size = (size_t) ftell(secret_file);
-        if (real_size <= 0) {
-            secret_debug("[error]Secret file size is 0!");
+        se->size = (size_t) ftell(secret_file);
+        if (se->size <= 0) {
+            secret_debug("[secret_image_hide]Secret file size is 0! error!");
             error_code = -11;
             goto EXCEPTION;
         }
         rewind(secret_file);
-    } else {
-        real_size = se->size;
     }
-    if (max_secret_size < real_size) {
-        secret_debug2("Max volume less then secret size! max_volume=%d, secret_size=%d!",
-                      max_secret_size, real_size);
+    size_t secret_total_size = se->size + min_secret_size;// 如果是带meta格式，要加上meta和crc的大小
+    // 判断图片是能容纳的下所有secret信息
+    if (max_secret_size < secret_total_size) {
+        secret_debug2("[secret_image_hide]Max volume less then secret size! max_volume=%d, secret_size=%d!",
+                      max_secret_size, secret_total_size);
         error_code = -10;
         goto EXCEPTION;
     }
 
-    secret_debug("Transferring info struct");
+    secret_debug("[secret_image_hide]Transferring info struct");
     {
         png_uint_32 width2, height2;
         int bit_depth2, color_type2, interlace_type2, compression_type2, filter_type2;
         if (png_get_IHDR(read_ptr, read_info_ptr, &width2, &height2, &bit_depth2,
-                         &color_type2, &interlace_type2, &compression_type2, &filter_type2) != 0)
-        {
+                         &color_type2, &interlace_type2, &compression_type2, &filter_type2) != 0) {
             png_set_IHDR(write_ptr, write_info_ptr, width2, height2, bit_depth2,
                          color_type2, interlace_type2, compression_type2, filter_type2);
         }
@@ -701,8 +755,7 @@ int secret_image_hide(const char *image_input_file,
         png_fixed_point white_x, white_y, red_x, red_y, green_x, green_y, blue_x,
                 blue_y;
         if (png_get_cHRM_fixed(read_ptr, read_info_ptr, &white_x, &white_y,
-                               &red_x, &red_y, &green_x, &green_y, &blue_x, &blue_y) != 0)
-        {
+                               &red_x, &red_y, &green_x, &green_y, &blue_x, &blue_y) != 0) {
             png_set_cHRM_fixed(write_ptr, write_info_ptr, white_x, white_y, red_x,
                                red_y, green_x, green_y, blue_x, blue_y);
         }
@@ -721,8 +774,7 @@ int secret_image_hide(const char *image_input_file,
    {
       double white_x, white_y, red_x, red_y, green_x, green_y, blue_x, blue_y;
       if (png_get_cHRM(read_ptr, read_info_ptr, &white_x, &white_y, &red_x,
-         &red_y, &green_x, &green_y, &blue_x, &blue_y) != 0)
-      {
+         &red_y, &green_x, &green_y, &blue_x, &blue_y) != 0) {
          png_set_cHRM(write_ptr, write_info_ptr, white_x, white_y, red_x,
             red_y, green_x, green_y, blue_x, blue_y);
       }
@@ -743,8 +795,7 @@ int secret_image_hide(const char *image_input_file,
         png_bytep profile;
         png_uint_32 proflen;
         int compression_type2;
-        if (png_get_iCCP(read_ptr, read_info_ptr, &name, &compression_type2, &profile, &proflen) != 0)
-        {
+        if (png_get_iCCP(read_ptr, read_info_ptr, &name, &compression_type2, &profile, &proflen) != 0) {
             png_set_iCCP(write_ptr, write_info_ptr, name, compression_type2,
                          profile, proflen);
         }
@@ -766,8 +817,7 @@ int secret_image_hide(const char *image_input_file,
 #ifdef PNG_bKGD_SUPPORTED
     {
         png_color_16p background;
-        if (png_get_bKGD(read_ptr, read_info_ptr, &background) != 0)
-        {
+        if (png_get_bKGD(read_ptr, read_info_ptr, &background) != 0) {
             png_set_bKGD(write_ptr, write_info_ptr, background);
         }
     }
@@ -783,8 +833,7 @@ int secret_image_hide(const char *image_input_file,
     {
         png_int_32 offset_x, offset_y;
         int unit_type;
-        if (png_get_oFFs(read_ptr, read_info_ptr, &offset_x, &offset_y, &unit_type) != 0)
-        {
+        if (png_get_oFFs(read_ptr, read_info_ptr, &offset_x, &offset_y, &unit_type) != 0) {
             png_set_oFFs(write_ptr, write_info_ptr, offset_x, offset_y, unit_type);
         }
     }
@@ -796,8 +845,7 @@ int secret_image_hide(const char *image_input_file,
         png_int_32 X0, X1;
         int type, nparams;
         if (png_get_pCAL(read_ptr, read_info_ptr, &purpose, &X0, &X1, &type,
-                         &nparams, &units, &params) != 0)
-        {
+                         &nparams, &units, &params) != 0) {
             png_set_pCAL(write_ptr, write_info_ptr, purpose, X0, X1, type,
                          nparams, units, params);
         }
@@ -825,8 +873,7 @@ int secret_image_hide(const char *image_input_file,
     {
         int unit;
         double scal_width, scal_height;
-        if (png_get_sCAL(read_ptr, read_info_ptr, &unit, &scal_width, &scal_height) != 0)
-        {
+        if (png_get_sCAL(read_ptr, read_info_ptr, &unit, &scal_width, &scal_height) != 0) {
             png_set_sCAL(write_ptr, write_info_ptr, unit, scal_width, scal_height);
         }
     }
@@ -835,12 +882,8 @@ int secret_image_hide(const char *image_input_file,
    {
       int unit;
       png_charp scal_width, scal_height;
-
-      if (png_get_sCAL_s(read_ptr, read_info_ptr, &unit, &scal_width,
-          &scal_height) != 0)
-      {
-         png_set_sCAL_s(write_ptr, write_info_ptr, unit, scal_width,
-             scal_height);
+      if (png_get_sCAL_s(read_ptr, read_info_ptr, &unit, &scal_width, &scal_height) != 0) {
+         png_set_sCAL_s(write_ptr, write_info_ptr, unit, scal_width, scal_height);
       }
    }
 #endif
@@ -850,9 +893,8 @@ int secret_image_hide(const char *image_input_file,
     {
         png_textp text_ptr;
         int num_text;
-        if (png_get_text(read_ptr, read_info_ptr, &text_ptr, &num_text) > 0)
-        {
-            secret_debug1("Handling %d iTXt/tEXt/zTXt chunks", num_text);
+        if (png_get_text(read_ptr, read_info_ptr, &text_ptr, &num_text) > 0) {
+            secret_debug1("[secret_image_hide]Handling %d iTXt/tEXt/zTXt chunks", num_text);
             png_set_text(write_ptr, write_info_ptr, text_ptr, num_text);
         }
     }
@@ -860,8 +902,7 @@ int secret_image_hide(const char *image_input_file,
 #ifdef PNG_tIME_SUPPORTED
     {
         png_timep mod_time;
-        if (png_get_tIME(read_ptr, read_info_ptr, &mod_time) != 0)
-        {
+        if (png_get_tIME(read_ptr, read_info_ptr, &mod_time) != 0) {
             png_set_tIME(write_ptr, write_info_ptr, mod_time);
         }
     }
@@ -871,9 +912,7 @@ int secret_image_hide(const char *image_input_file,
         png_bytep trans_alpha;
         int num_trans;
         png_color_16p trans_color;
-        if (png_get_tRNS(read_ptr, read_info_ptr, &trans_alpha, &num_trans,
-                         &trans_color) != 0)
-        {
+        if (png_get_tRNS(read_ptr, read_info_ptr, &trans_alpha, &num_trans, &trans_color) != 0) {
             int sample_max = (1 << bit_depth);
             /* libpng doesn't reject a tRNS chunk with out-of-range samples */
             if (!((color_type == PNG_COLOR_TYPE_GRAY &&
@@ -882,8 +921,7 @@ int secret_image_hide(const char *image_input_file,
                    ((int)trans_color->red > sample_max ||
                     (int)trans_color->green > sample_max ||
                     (int)trans_color->blue > sample_max))))
-                png_set_tRNS(write_ptr, write_info_ptr, trans_alpha, num_trans,
-                             trans_color);
+                png_set_tRNS(write_ptr, write_info_ptr, trans_alpha, num_trans, trans_color);
         }
     }
 #endif
@@ -891,14 +929,13 @@ int secret_image_hide(const char *image_input_file,
     {
         png_unknown_chunkp unknowns;
         int num_unknowns = png_get_unknown_chunks(read_ptr, read_info_ptr, &unknowns);
-        if (num_unknowns != 0)
-        {
+        if (num_unknowns != 0) {
             png_set_unknown_chunks(write_ptr, write_info_ptr, unknowns, num_unknowns);
         }
     }
 #endif
 
-    secret_debug("Writing info struct");
+    secret_debug("[secret_image_hide]Writing info struct");
 
     /* Write the info in two steps so that if we write the 'unknown' chunks here
      * they go to the correct place.
@@ -906,37 +943,61 @@ int secret_image_hide(const char *image_input_file,
     png_write_info_before_PLTE(write_ptr, write_info_ptr);
     png_write_info(write_ptr, write_info_ptr);
 
-    secret_debug("Writing row data");
+    secret_debug("[secret_image_hide]Writing row data");
 #ifdef PNG_READ_INTERLACING_SUPPORTED
     num_pass = png_set_interlace_handling(read_ptr);
     if (png_set_interlace_handling(write_ptr) != num_pass)
         png_error(write_ptr, "png_set_interlace_handling: inconsistent num_pass");
 #endif
 
+    // 创建row缓冲区
     png_size_t row_buf_size = png_get_rowbytes(read_ptr, read_info_ptr);
     row_buf = (png_bytep)png_malloc(read_ptr, row_buf_size);
-    secret_debug1("Allocating row buffer...row_buf_size = %d", row_buf_size);
-
+    secret_debug1("[secret_image_hide]Allocating row buffer...row_buf_size = %d", row_buf_size);
     // 创建secret缓存区
-    size_t secret_buf_max;// secret缓冲区的大小上限
-    size_t secret_buf_size;// secret缓冲区的实际数据大小
-    int secret_offset = 0;
+    size_t secret_buf_max = secret_contains_bytes(row_buf_size) + 2;// secret缓冲区的大小，考虑到余数，必须再加2！
+    secret_buf = malloc(secret_buf_max);
+    // 创建meta数据和crc校验码
+    if (se->meta) {
+        if (secret_create_meta(se, &meta_buf) == -1) {
+            secret_debug("[secret_image_hide]Meta create error!");
+            error_code = -13;
+            goto EXCEPTION;
+        }
+        se->meta->crc = secret_cal_crc(se);
+        if (se->meta->crc == 0) {
+            secret_debug("[secret_image_hide]CRC calculation error!");
+            error_code = -14;
+            goto EXCEPTION;
+        }
+    }
+    // 创建多重数据源
+    data_source *secret_meta_ds;// 创建secret的meta数据源
+    data_source *secret_data_ds;// 创建secret内容数据源
+    data_source *secret_crc_ds;// 创建secret的crc数据源
     if (se->file_path) {
         rewind(secret_file);
-        secret_buf_max = secret_contains_bytes(row_buf_size) + 2;// secret缓冲区大小，考虑到余数，必须再加2！
-        secret_buf = malloc(secret_buf_max);
-        secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
-        if (ferror(secret_file)) {
-            secret_debug("[error]Secret file read error!");
+        secret_data_ds = create_file_data_source(secret_file, -1);
+        if (!secret_data_ds) {
+            secret_debug("[secret_image_hide]Secret file read error1!");
             error_code = -12;
             goto EXCEPTION;
         }
-        secret_debug1("Allocating secret buffer...secret_size = %d", secret_buf_max);
     } else {
-        secret_buf_size = se->size;
-        secret_buf = se->data;
+        secret_data_ds = create_memory_data_source(se->data, (long) se->size);
     }
-
+    if (se->meta) {
+        secret_meta_ds = create_memory_data_source(meta_buf, SECRET_META_LENGTH);
+        crc_buf = malloc(SECRET_CRC_LENGTH);
+        ulong_to_byte(se->meta->crc, crc_buf, SECRET_CRC_LENGTH);
+        secret_crc_ds = create_memory_data_source(crc_buf, SECRET_CRC_LENGTH);
+        data_source *source_list[3] = {secret_meta_ds, secret_data_ds, secret_crc_ds};
+        ds = create_multi_data_source(source_list, 3);
+    } else {
+        data_source *source_list[1] = {secret_data_ds};
+        ds = create_multi_data_source(source_list, 1);
+    }
+    // 定义remainder和filter回调
     secret_remainder remain = {
             .size = 0
     };
@@ -948,37 +1009,36 @@ int secret_image_hide(const char *image_input_file,
             .is_effective = wrapper_is_effective,
             .get_effective_size = wrapper_get_effective_size
     };
-
+    // 逐行写入图片
     int y;
-    int write_result = 0;
-    int secret_write = 0;// 当前已写入的secret字节数
+    int hide_result = 0;
+    long secret_total_write = 0;// 当前已写入的secret字节数
+    int secret_buf_size;// secret缓冲区的实际数据大小
     for (pass = 0; pass < num_pass; pass++) {
-        secret_debug1("Writing row data for pass %d", pass);
+        secret_debug1("[secret_image_hide]Writing row data for pass %d", pass);
         for (y = 0; y < height; y++) {
             png_read_row(read_ptr, row_buf, NULL);
             // 如果secret没写入完毕，且是adam7有效行
-            if (secret_write < real_size && row_is_adam7(y, num_pass > 1 ? pass : -1)) {
-                // 将secret隐藏进image中
+            if (secret_total_write < secret_total_size && row_is_adam7(y, num_pass > 1 ? pass : -1)) {
+                // 从数据源中读入数据进secret缓冲区
+                if (ds->move(ds, secret_total_write) != 0) {
+                    secret_debug("[secret_image_hide]Secret file read error2!");
+                    error_code = -12;
+                    goto EXCEPTION;
+                }
+                secret_buf_size = ds->read(ds, secret_buf_max, secret_buf);
+                if (secret_buf_size == -1) {
+                    secret_debug("[secret_image_hide]Secret file read error3!");
+                    error_code = -12;
+                    goto EXCEPTION;
+                }
+                // 将secret缓冲区中的数据隐藏进image中
                 param.pass = num_pass > 1 ? pass : -1;
-                write_result = secret_hide(row_buf, 0, row_buf_size,
-                                           secret_buf, secret_offset,
-                                           se->file_path ? secret_buf_size : real_size - secret_offset,
-                                           &remain, &filter);
-                if (write_result > 0) {
-                    secret_write += write_result;
-                    if (se->file_path) {
-                        // 根据已写入的字节数，从secret文件中读取下一段secret_buf
-                        fseek(secret_file, secret_write, SEEK_SET);// 移动文件指针
-                        secret_buf_size = fread(secret_buf, 1, secret_buf_max, secret_file);
-                        if (ferror(secret_file)) {
-                            secret_debug("[error]Secret file read error!");
-                            error_code = -12;
-                            goto EXCEPTION;
-                        }
-                    } else {
-                        // secret已全部加载到secret_buf的内存中，直接偏移offset即可
-                        secret_offset += write_result;
-                    }
+                hide_result = secret_hide(row_buf, 0, row_buf_size,
+                                          secret_buf, 0, (size_t) secret_buf_size,
+                                          &remain, &filter);
+                if (hide_result > 0) {
+                    secret_total_write += hide_result;
                 }
             }
             png_write_row(write_ptr, row_buf);
@@ -994,15 +1054,14 @@ int secret_image_hide(const char *image_input_file,
 #  endif
 #endif
 
-    secret_debug("Reading and writing end_info data");
+    secret_debug("[secret_image_hide]Reading and writing end_info data");
     png_read_end(read_ptr, end_info_ptr);
 #ifdef PNG_TEXT_SUPPORTED
     {
         png_textp text_ptr;
         int num_text;
-        if (png_get_text(read_ptr, end_info_ptr, &text_ptr, &num_text) > 0)
-        {
-            secret_debug1("Handling %d iTXt/tEXt/zTXt chunks", num_text);
+        if (png_get_text(read_ptr, end_info_ptr, &text_ptr, &num_text) > 0) {
+            secret_debug1("[secret_image_hide]Handling %d iTXt/tEXt/zTXt chunks", num_text);
             png_set_text(write_ptr, write_end_info_ptr, text_ptr, num_text);
         }
     }
@@ -1010,8 +1069,7 @@ int secret_image_hide(const char *image_input_file,
 #ifdef PNG_tIME_SUPPORTED
     {
         png_timep mod_time;
-        if (png_get_tIME(read_ptr, end_info_ptr, &mod_time) != 0)
-        {
+        if (png_get_tIME(read_ptr, end_info_ptr, &mod_time) != 0) {
             png_set_tIME(write_ptr, write_end_info_ptr, mod_time);
         }
     }
@@ -1029,21 +1087,25 @@ int secret_image_hide(const char *image_input_file,
 
     png_write_end(write_ptr, write_end_info_ptr);
 
-    secret_debug("destroying row_buf for read_ptr");
+    secret_debug("[secret_image_hide]Destroying row_buf for read_ptr");
     png_free(read_ptr, row_buf);
     row_buf = NULL;
-
-    secret_debug("Destroying data structs");
-    secret_debug("destroying read_ptr, read_info_ptr, end_info_ptr");
+    secret_debug("[secret_image_hide]Destroying read_ptr, read_info_ptr, end_info_ptr");
     png_destroy_read_struct(&read_ptr, &read_info_ptr, &end_info_ptr);
-    secret_debug("destroying write_end_info_ptr");
+    secret_debug("[secret_image_hide]Destroying write_end_info_ptr");
     png_destroy_info_struct(write_ptr, &write_end_info_ptr);
-    secret_debug("destroying write_ptr, write_info_ptr");
+    secret_debug("[secret_image_hide]Destroying write_ptr, write_info_ptr");
     png_destroy_write_struct(&write_ptr, &write_info_ptr);
-    secret_debug("Destruction complete.");
-
+    secret_debug("[secret_image_hide]Destruction complete.");
     fclose(fpin);
     fclose(fpout);
+    if (secret_file) {
+        fclose(secret_file);
+    }
+    free(secret_buf);
+    free(meta_buf);
+    free(crc_buf);
+    destroy_multi_data_source(ds);
 
 
 #if defined(PNG_USER_MEM_SUPPORTED) && PNG_DEBUG
@@ -1053,5 +1115,5 @@ int secret_image_hide(const char *image_input_file,
     secret_debug1("[secret_image_hide]     Number of allocations: %10d", num_allocations);
 #endif
 
-    return secret_write;
+    return secret_total_write;
 }
