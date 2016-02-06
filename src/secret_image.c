@@ -151,6 +151,126 @@ png_debug_free(png_structp png_ptr, png_voidp ptr)
 // ========================== 自定义内存管理函数[end] ========================== //
 
 
+// ========================== png相关函数[start] ========================== //
+char adam7_row_interval[7] = {8, 8, 4, 4, 2, 2, 1};
+char adam7_row_offset[7] = {0, 4, 0, 2, 0, 1, 0};
+char adam7_col_interval[7] = {8, 8, 8, 4, 4, 2, 2};
+char adam7_col_offset[7] = {0, 0, 4, 0, 2, 0, 1};
+
+/**
+ * 检验指定文件是否png图片。
+ * 注意：该方法调用完毕，不会关闭file，并且文件指针会指回文件开头。
+ * @param file_path 文件路径
+ * @return 如果是png图片，返回非0；如果不是png，则返回0。
+ */
+#define PNG_BYTES_TO_CHECK 4
+static int check_png2(FILE *file) {
+    png_byte buf[PNG_BYTES_TO_CHECK];
+    if (file == NULL)
+        return 0;
+    rewind(file);
+    if (fread(buf, 1, PNG_BYTES_TO_CHECK, file) != PNG_BYTES_TO_CHECK) {
+        rewind(file);
+        return 0;
+    }
+    // 对比文件前4个magic字节
+    int result = !png_sig_cmp(buf, 0, PNG_BYTES_TO_CHECK);
+    // 将文件指针指回文件开头，不影响后续libpng对文件的操作
+    rewind(file);
+    return result;
+}
+
+/**
+ * 检验指定文件是否png图片。
+ * @param file_path 文件路径
+ * @return 如果是png图片，返回非0；如果不是png，则返回0。
+ */
+static int check_png(char *file_path) {
+    FILE *file = fopen(file_path, "rb");
+    int result = check_png2(file);
+    if (file)
+        fclose(file);
+    return result;
+}
+
+/**
+ * 获取指定颜色类型下，一个颜色像素所占用的字节数。
+ * @param color_type 颜色类型(目前只支持0,2,4,6)
+ * @return 返回颜色像素所占用的字节数；如果颜色类型不支持或不识别，则返回0。
+ */
+static size_t get_color_bytes(unsigned char color_type) {
+    switch (color_type) {
+        case 0:// 灰度图像
+            return 1;
+        case 2:// 真色彩图像
+            return 3;
+        case 4:// 带α通道的灰度图像
+            return 2;
+        case 6:// 带α通道的真色彩图像
+            return 4;
+        default:
+            return 0;// 目前不支持类型3，索引彩色图像，所以认为颜色字节数为0
+    }
+}
+
+/**
+ * 在当前扫描层数，判断一行内的字节索引位置，是否是ada7采样的有效位(默认已经是在有效行内)。
+ * @param index 行内的字节索位置
+ * @param pass 当前间隔扫描的层数(Adam7算法)。-1表示该png没有启用间隔扫描。
+ * @param color_type png图片的颜色类型(0,2,4,6)。
+ * @return 如果是有效位，返回1；不是则返回0。
+ */
+static int col_is_adam7(int index, int pass, unsigned char color_type) {
+    if (pass == -1) {
+        return 1;
+    }
+    size_t color_byte = get_color_bytes(color_type);
+    if (color_byte == 0) {
+        return 0;
+    }
+    int i = index / color_byte;
+    int interval = adam7_row_interval[pass];
+    int offset = adam7_row_offset[pass];
+    return i % interval == offset;
+}
+
+/**
+ * 在当前扫描层数，判断某一行是否是ada7采样的有效行。
+ * @param index 行索引
+ * @param pass 当前间隔扫描的层数(Adam7算法)。-1表示该png没有启用间隔扫描。
+ * @param color_type png图片的颜色类型(0,2,4,6)。
+ * @return 如果是有效行，返回1；不是则返回0。
+ */
+static int row_is_adam7(int index, int pass) {
+    if (pass == -1) {
+        return 1;
+    }
+    return index % adam7_col_interval[pass] == adam7_col_offset[pass];
+}
+
+/**
+ * 在当前扫描层数，获取该行中ada7采样的有效位字节数(默认已经是在有效行内)。
+ * @param row_byte 当前该行的总字节数
+ * @param pass 当前间隔扫描的层数(Adam7算法)。-1表示该png没有启用间隔扫描。
+ * @param color_type png图片的颜色类型(0,2,4,6)。
+ * @return 如果是有效行，返回1；不是则返回0。
+ */
+static size_t get_adam7_byte_size(size_t row_byte, int pass, unsigned char color_type) {
+    if (pass == -1) {
+        return row_byte;
+    }
+    size_t color_byte = get_color_bytes(color_type);
+    if (color_byte == 0) {
+        return 0;
+    }
+    size_t real_size = row_byte / color_byte;
+    int interval = adam7_row_interval[pass];
+    int offset = adam7_row_offset[pass];
+    return (real_size - offset + interval - 1) / interval * color_byte;// 除法向上取整
+}
+// ========================== png相关函数[end] ========================== //
+
+
 // ========================== secret_filter的相关参数[start] ========================== //
 typedef struct _interlace_param {
     int pass;// 当前扫描的是第几层
@@ -334,14 +454,16 @@ int secret_image_dig(const char *image_file, secret *se) {
         row_buf = NULL;
         png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
         fclose(fpin);
-        if (secret_file) {
-            fclose(secret_file);
-        }
+        fclose(secret_file);
         free(secret_memory);
         free(secret_buf);
         free(meta_buf);
         free(crc_buf);
         destroy_multi_data_source(ds);
+        //出错的话，删除生成的secret文件
+        if (se->file_path) {
+            remove(se->file_path);
+        }
         return error_code;
     }
     // ================== 统一出错处理代码[end] ================== //
@@ -524,9 +646,7 @@ int secret_image_dig(const char *image_file, secret *se) {
     secret_debug("[secret_image_dig]Destroying read_ptr, read_info_ptr");
     png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
     fclose(fpin);
-    if (secret_file) {
-        fclose(secret_file);
-    }
+    fclose(secret_file);
     free(secret_buf);
     free(meta_buf);
     free(crc_buf);
@@ -625,13 +745,13 @@ int secret_image_hide(const char *image_input_file,
         png_destroy_write_struct(&write_ptr, &write_info_ptr);
         fclose(fpin);
         fclose(fpout);
-        if (secret_file) {
-            fclose(secret_file);
-        }
+        fclose(secret_file);
         free(secret_buf);
         free(meta_buf);
         free(crc_buf);
         destroy_multi_data_source(ds);
+        //出错的话，删除生成的新的image文件
+        remove(image_output_file);
         return error_code;
     }
     // =============== 统一出错处理代码[end] =============== //
@@ -1099,9 +1219,7 @@ int secret_image_hide(const char *image_input_file,
     secret_debug("[secret_image_hide]Destruction complete.");
     fclose(fpin);
     fclose(fpout);
-    if (secret_file) {
-        fclose(secret_file);
-    }
+    fclose(secret_file);
     free(secret_buf);
     free(meta_buf);
     free(crc_buf);
