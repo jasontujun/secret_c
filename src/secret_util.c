@@ -54,10 +54,23 @@ int ulong_to_byte(unsigned long integer, unsigned char* bytes, size_t length) {
     return 1;
 }
 
+int check_file_format(FILE* file, void *signature, size_t bytes_to_check) {
+    unsigned char buf[bytes_to_check];
+    if (file == NULL)
+        return 0;
+    rewind(file);
+    if (fread(buf, 1, bytes_to_check, file) != bytes_to_check) {
+        rewind(file);
+        return 0;
+    }
+    // 对比文件前num_to_check个magic字节
+    return memcmp(signature, buf, bytes_to_check);
+}
+
 
 // =============== data_source相关代码[start] =============== //
 
-typedef struct _file_data {
+typedef struct {
     FILE *file;
     long init_pos;// 文件的初始指针位置
     void (*read_callback)(void *, size_t, void *);// 读操作的回调函数指针
@@ -152,7 +165,7 @@ static void file_set_write_full_callback_wrapper(data_source *source, void *para
 }
 
 
-typedef struct _mem_data {
+typedef struct {
     unsigned char *mem;
     long pos;
     void (*read_callback)(void *, size_t, void *);// 读操作的回调函数指针

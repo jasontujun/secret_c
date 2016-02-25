@@ -1,6 +1,13 @@
 //
 // Created by jason on 2016/1/14.
 //
+/**
+ * secret_struct.h
+ *
+ * This file defines the structure and data specification of secret message,
+ * including secret content and secret meta data.
+ * Also this file provide some methods to create/recycle secret structure and crc calculation.
+ */
 
 #ifndef SECRET_SECRET_H
 #define SECRET_SECRET_H
@@ -14,7 +21,7 @@
 #define SECRET_CRC_LENGTH 4 // crc校验码长度(单位:字节)
 #endif
 
-typedef struct _secret_meta {
+typedef struct {
     unsigned char type[2];     // 类型(第二个字节为奇数表示包含key，为偶数表示不含key)
     char *key;                  // md5编码后的密钥
     unsigned long crc;         // crc校验码(32 bits or more)
@@ -28,7 +35,7 @@ typedef struct _secret_meta {
  * |<--------------------------- meta -------------------------->|<----- data ---->|<--- crc32 --->|
  * 注意：如果key字段都为0时，表示该字段为空，而不是表示该字段的值为0；
  */
-typedef struct _secret {
+typedef struct {
     char *file_path;        // data数据的文件路径
     unsigned char *data;   // data数据的内存指针
     size_t size;            // data数据的大小

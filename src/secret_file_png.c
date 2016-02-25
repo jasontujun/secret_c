@@ -6,8 +6,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "png.h"
-#include "secret_image.h"
-#include "secret_hider.h"
+#include "secret_file.h"
+#include "secret_codec.h"
 #include "secret_util.h"
 
 #ifndef PNG_DEBUG
@@ -41,10 +41,60 @@ static int maximum_allocation = 0;
 static int total_allocation = 0;
 static int num_allocations = 0;
 
-png_voidp PNGCBAPI png_debug_malloc PNGARG((png_structp png_ptr, png_alloc_size_t size));
-void PNGCBAPI png_debug_free PNGARG((png_structp png_ptr, png_voidp ptr));
 
-png_voidp
+/* Free a pointer.  It is removed from the list at the same time. */
+static void PNGCBAPI
+png_debug_free(png_structp png_ptr, png_voidp ptr)
+{
+    if (png_ptr == NULL)
+        secret_debug("[png_debug_free]NULL pointer to png_debug_free.");
+
+    if (ptr == 0)
+    {
+        return;
+    }
+
+    /* Unlink the element from the list. */
+    {
+        memory_infop *ppinfo = &pinformation;
+        for (;;)
+        {
+            memory_infop pinfo = *ppinfo;
+
+            if (pinfo->pointer == ptr)
+            {
+                *ppinfo = pinfo->next;
+                current_allocation -= pinfo->size;
+                if (current_allocation < 0)
+                    secret_debug("[png_debug_free]Duplicate free of memory");
+                /* We must free the list element too, but first kill
+                   the memory that is to be freed. */
+                memset(ptr, 0x55, pinfo->size);
+                if (pinfo != NULL)
+                    free(pinfo);
+                pinfo = NULL;
+                break;
+            }
+
+            if (pinfo->next == NULL)
+            {
+                secret_debug1("[png_debug_free]Pointer %p not found", ptr);
+                break;
+            }
+
+            ppinfo = &pinfo->next;
+        }
+    }
+
+    /* Finally free the data. */
+    secret_debug1("[png_debug_free]Freeing %p", ptr);
+
+    if (ptr != NULL)
+        free(ptr);
+    ptr = NULL;
+}
+
+static png_voidp
 PNGCBAPI png_debug_malloc(png_structp png_ptr, png_alloc_size_t size)
 {
     /* png_malloc has already tested for NULL; png_create_struct calls
@@ -95,58 +145,6 @@ PNGCBAPI png_debug_malloc(png_structp png_ptr, png_alloc_size_t size)
         return (png_voidp)(pinfo->pointer);
     }
 }
-
-/* Free a pointer.  It is removed from the list at the same time. */
-void PNGCBAPI
-png_debug_free(png_structp png_ptr, png_voidp ptr)
-{
-    if (png_ptr == NULL)
-        secret_debug("[png_debug_free]NULL pointer to png_debug_free.");
-
-    if (ptr == 0)
-    {
-        return;
-    }
-
-    /* Unlink the element from the list. */
-    {
-        memory_infop *ppinfo = &pinformation;
-        for (;;)
-        {
-            memory_infop pinfo = *ppinfo;
-
-            if (pinfo->pointer == ptr)
-            {
-                *ppinfo = pinfo->next;
-                current_allocation -= pinfo->size;
-                if (current_allocation < 0)
-                    secret_debug("[png_debug_free]Duplicate free of memory");
-                /* We must free the list element too, but first kill
-                   the memory that is to be freed. */
-                memset(ptr, 0x55, pinfo->size);
-                if (pinfo != NULL)
-                    free(pinfo);
-                pinfo = NULL;
-                break;
-            }
-
-            if (pinfo->next == NULL)
-            {
-                secret_debug1("[png_debug_free]Pointer %p not found", ptr);
-                break;
-            }
-
-            ppinfo = &pinfo->next;
-        }
-    }
-
-    /* Finally free the data. */
-    secret_debug1("[png_debug_free]Freeing %p", ptr);
-
-    if (ptr != NULL)
-        free(ptr);
-    ptr = NULL;
-}
 #endif /* USER_MEM && DEBUG */
 // ========================== 自定义内存管理函数[end] ========================== //
 
@@ -156,42 +154,6 @@ char adam7_row_interval[7] = {8, 8, 4, 4, 2, 2, 1};
 char adam7_row_offset[7] = {0, 4, 0, 2, 0, 1, 0};
 char adam7_col_interval[7] = {8, 8, 8, 4, 4, 2, 2};
 char adam7_col_offset[7] = {0, 0, 4, 0, 2, 0, 1};
-
-/**
- * 检验指定文件是否png图片。
- * 注意：该方法调用完毕，不会关闭file，并且文件指针会指回文件开头。
- * @param file_path 文件路径
- * @return 如果是png图片，返回非0；如果不是png，则返回0。
- */
-#define PNG_BYTES_TO_CHECK 4
-static int check_png2(FILE *file) {
-    png_byte buf[PNG_BYTES_TO_CHECK];
-    if (file == NULL)
-        return 0;
-    rewind(file);
-    if (fread(buf, 1, PNG_BYTES_TO_CHECK, file) != PNG_BYTES_TO_CHECK) {
-        rewind(file);
-        return 0;
-    }
-    // 对比文件前4个magic字节
-    int result = !png_sig_cmp(buf, 0, PNG_BYTES_TO_CHECK);
-    // 将文件指针指回文件开头，不影响后续libpng对文件的操作
-    rewind(file);
-    return result;
-}
-
-/**
- * 检验指定文件是否png图片。
- * @param file_path 文件路径
- * @return 如果是png图片，返回非0；如果不是png，则返回0。
- */
-static int check_png(char *file_path) {
-    FILE *file = fopen(file_path, "rb");
-    int result = check_png2(file);
-    if (file)
-        fclose(file);
-    return result;
-}
 
 /**
  * 获取指定颜色类型下，一个颜色像素所占用的字节数。
@@ -272,7 +234,7 @@ static size_t get_adam7_byte_size(size_t row_byte, int pass, unsigned char color
 
 
 // ========================== secret_filter的相关参数[start] ========================== //
-typedef struct _interlace_param {
+typedef struct {
     int pass;// 当前扫描的是第几层
     png_byte color_type;// 颜色类型
 } interlace_param;
@@ -280,23 +242,16 @@ typedef struct _interlace_param {
 /**
  * 判断当前索引位置的数据是否有效(用于filter.is_effective)
  */
-static int wrapper_is_effective(int index, void *param) {
+static int wrapper_is_effective(void *data_p, int index, void *param) {
     interlace_param *p = param;
     return col_is_adam7(index, p->pass, p->color_type);
 }
 
-/**
- * 获取给定数据内有效数据的总数(用于filter.get_effective_size)
- */
-static size_t wrapper_get_effective_size(size_t data_size, void *param) {
-    interlace_param *p = param;
-    return get_adam7_byte_size(data_size, p->pass, p->color_type);
-}
 // ========================== secret_filter的相关参数[end] ========================== //
 
 
 // ========================== dig过程中的回调函数[start] ========================== //
-typedef struct _parse_meta_param {
+typedef struct {
     int parse_result;// 解析结果：0表示未解析，1表示解析成功，-1表示解析失败
     secret *se;
     multi_data_source *ds;
@@ -335,8 +290,12 @@ static void wrapper_dig_cal_crc(void *data, size_t size, void *param) {
 
 // ========================== dig过程中的回调函数[start] ========================== //
 
+static int check_png(FILE *file) {
+    png_byte png_signature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    return check_file_format(file, png_signature, 4);
+}
 
-size_t secret_image_volume(const char *image_file, int has_meta) {
+static size_t secret_png_volume(const char *image_file, int has_meta) {
     if (!image_file) {
         return 0;
     }
@@ -348,12 +307,6 @@ size_t secret_image_volume(const char *image_file, int has_meta) {
 
     if ((fpin = fopen(image_file, "rb")) == NULL) {
         secret_debug1("[secret_image_volume]Could not find input file %s", image_file);
-        return 0;
-    }
-
-    if (!check_png2(fpin)) {
-        secret_debug1("[secret_image_volume]Not PNG file %s", image_file);
-        fclose(fpin);
         return 0;
     }
 
@@ -391,7 +344,7 @@ size_t secret_image_volume(const char *image_file, int has_meta) {
     secret_debug1("[secret_image_volume]image color_type %d", color_type);
     secret_debug1("[secret_image_volume]image interlace_type %d", interlace_type);
 
-    size_t max_secret_size = secret_contains_bytes(width * height * get_color_bytes(color_type));
+    size_t max_secret_size = (width * height * get_color_bytes(color_type)) / 8;
     if (has_meta) {
         max_secret_size = max(max_secret_size, SECRET_META_LENGTH) - SECRET_META_LENGTH;
     }
@@ -402,11 +355,11 @@ size_t secret_image_volume(const char *image_file, int has_meta) {
     return max_secret_size;
 }
 
-int secret_image_meta(const char *image_file, secret *result) {
+static int secret_png_meta(const char *image_file, secret *result) {
     return 0;
 }
 
-int secret_image_dig(const char *image_file, secret *se) {
+static int secret_png_dig(const char *image_file, secret *se) {
     if (!image_file || !se) {
         return -1;
     }
@@ -429,12 +382,6 @@ int secret_image_dig(const char *image_file, secret *se) {
     if ((fpin = fopen(image_file, "rb")) == NULL) {
         secret_debug1("[secret_image_dig]Could not find input file %s", image_file);
         return -2;
-    }
-
-    if (!check_png2(fpin)) {
-        secret_debug1("[secret_image_dig]Not PNG file %s", image_file);
-        fclose(fpin);
-        return -3;
     }
 
     secret_debug("[secret_image_dig]Allocating read structures");
@@ -507,7 +454,7 @@ int secret_image_dig(const char *image_file, secret *se) {
 #endif
 
     // 计算该图片的secret最大容量
-    const size_t max_secret_size = secret_contains_bytes(width * height * get_color_bytes(color_type));
+    const size_t max_secret_size = (width * height * get_color_bytes(color_type)) / 8;
     if (max_secret_size == 0) {
         secret_debug1("[secret_image_dig]Image color_type error!! color_type=%d, cannot hide secret!", color_type);
         error_code = -6;
@@ -538,7 +485,7 @@ int secret_image_dig(const char *image_file, secret *se) {
     row_buf = (png_bytep)png_malloc(read_ptr, row_buf_size);
     secret_debug1("[secret_image_dig]Allocating row buffer...row_buf_size = %d", row_buf_size);
     // 创建secret缓存区
-    const size_t secret_buf_size = secret_contains_bytes(row_buf_size) + 2;// 为一行的最大secret数，考虑到余数，必须再加2！
+    const size_t secret_buf_size = row_buf_size / 8 + 2;// 为一行的最大secret数，考虑到余数，必须再加2！
     secret_buf = malloc(secret_buf_size);
     secret_debug1("[secret_image_dig]Allocating secret buffer...secret_size = %d", secret_buf_size);
     // 创建多重数据源
@@ -580,16 +527,17 @@ int secret_image_dig(const char *image_file, secret *se) {
         ds = create_multi_data_source(source_list, 1);
     }
     // 定义remainder和filter回调
-    secret_remainder remain = {
-            .size = 0
-    };
     interlace_param param = {
             .color_type = color_type
     };
+    unsigned char r_buf[7];
+    secret_remainder remain = {
+            .size = 0,
+            .data = r_buf
+    };
     secret_filter filter = {
             .param = &param,
-            .is_effective = wrapper_is_effective,
-            .get_effective_size = wrapper_get_effective_size
+            .is_effective = wrapper_is_effective
     };
     // 逐行解析图片
     int y;
@@ -605,7 +553,7 @@ int secret_image_dig(const char *image_file, secret *se) {
             }
             // 如果是adam7有效行，提取secret
             param.pass = num_pass > 1 ? pass : -1;
-            dig_result = secret_dig(row_buf, 0, row_buf_size,
+            dig_result = secret_dig(S_U_CHAR, row_buf, 0, row_buf_size,
                                      secret_buf, 0, min(secret_buf_size, secret_total_size - secret_total_read),
                                      &remain, &filter);
             if (dig_result > 0) {
@@ -659,9 +607,9 @@ int secret_image_dig(const char *image_file, secret *se) {
     return secret_total_size;
 }
 
-int secret_image_hide(const char *image_input_file,
-                      const char *image_output_file,
-                      secret *se) {
+static int secret_png_hide(const char *image_input_file,
+                           const char *image_output_file,
+                           secret *se) {
     if (!image_input_file || !image_output_file || !se) {
         return -1;
     }
@@ -694,20 +642,12 @@ int secret_image_hide(const char *image_input_file,
         }
     }
 
-    if ((fpin = fopen(image_input_file, "rb")) == NULL)
-    {
+    if ((fpin = fopen(image_input_file, "rb")) == NULL) {
         secret_debug1("[secret_image_hide]Could not find input file %s", image_input_file);
         return -3;
     }
 
-    if (!check_png2(fpin)) {
-        secret_debug1("[secret_image_hide]Not PNG file %s", image_input_file);
-        fclose(fpin);
-        return -4;
-    }
-
-    if ((fpout = fopen(image_output_file, "wb")) == NULL)
-    {
+    if ((fpout = fopen(image_output_file, "wb")) == NULL) {
         secret_debug1("[secret_image_hide]Could not open output file %s", image_output_file);
         fclose(fpin);
         return -5;
@@ -823,7 +763,7 @@ int secret_image_hide(const char *image_input_file,
 #endif
 
     // 计算该图片的secret最大容量
-    size_t max_secret_size = secret_contains_bytes(width * height * get_color_bytes(color_type));
+    size_t max_secret_size = (width * height * get_color_bytes(color_type)) / 8;
     if (max_secret_size == 0) {
         secret_debug1("[secret_image_hide]Image color_type error!! color_type=%d, cannot hide secret!", color_type);
         error_code = -9;
@@ -1075,7 +1015,7 @@ int secret_image_hide(const char *image_input_file,
     row_buf = (png_bytep)png_malloc(read_ptr, row_buf_size);
     secret_debug1("[secret_image_hide]Allocating row buffer...row_buf_size = %d", row_buf_size);
     // 创建secret缓存区
-    size_t secret_buf_max = secret_contains_bytes(row_buf_size) + 2;// secret缓冲区的大小，考虑到余数，必须再加2！
+    size_t secret_buf_max = row_buf_size / 8 + 2;// secret缓冲区的大小，考虑到余数，必须再加2！
     secret_buf = malloc(secret_buf_max);
     // 创建meta数据和crc校验码
     if (se->meta) {
@@ -1118,16 +1058,17 @@ int secret_image_hide(const char *image_input_file,
         ds = create_multi_data_source(source_list, 1);
     }
     // 定义remainder和filter回调
-    secret_remainder remain = {
-            .size = 0
-    };
     interlace_param param = {
             .color_type = color_type
     };
+    unsigned char r_buf[7];
+    secret_remainder remain = {
+            .size = 0,
+            .data = r_buf
+    };
     secret_filter filter = {
             .param = &param,
-            .is_effective = wrapper_is_effective,
-            .get_effective_size = wrapper_get_effective_size
+            .is_effective = wrapper_is_effective
     };
     // 逐行写入图片
     int y;
@@ -1154,7 +1095,7 @@ int secret_image_hide(const char *image_input_file,
                 }
                 // 将secret缓冲区中的数据隐藏进image中
                 param.pass = num_pass > 1 ? pass : -1;
-                hide_result = secret_hide(row_buf, 0, row_buf_size,
+                hide_result = secret_hide(S_U_CHAR, row_buf, 0, row_buf_size,
                                           secret_buf, 0, (size_t) secret_buf_size,
                                           &remain, &filter);
                 if (hide_result > 0) {
@@ -1235,3 +1176,11 @@ int secret_image_hide(const char *image_input_file,
 
     return secret_total_write;
 }
+
+secret_file_handler png_handler = {
+        .secret_file_format = check_png,
+        .secret_file_volume = secret_png_volume,
+        .secret_file_meta = secret_png_meta,
+        .secret_file_dig = secret_png_dig,
+        .secret_file_hide = secret_png_hide,
+};

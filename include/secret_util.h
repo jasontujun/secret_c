@@ -33,8 +33,21 @@ size_t byte_to_sizet(unsigned char* bytes, size_t length);
 
 /**
  * 将unsigned long转为字节数组。
+ * @param integer unsigned long的值
+ * @param bytes 字节数组，转换的结果
+ * @param length 字节个数(大于4，等同于4)
+ * @return 转换失败返回0；转换成功返回非0。
  */
 int ulong_to_byte(unsigned long integer, unsigned char* bytes, size_t length);
+
+/**
+ * 根据给定的文件头标识，判断文件是否符合指定的文件格式。
+ * @param file
+ * @param signature
+ * @param bytes_to_check
+ * @return 符合返回0；不符合返回非0。
+ */
+int check_file_format(FILE* file, void *signature, size_t bytes_to_check);
 
 
 /**
