@@ -181,4 +181,6 @@ multi_data_source * create_multi_data_source(data_source **source_list, size_t c
 
 void destroy_multi_data_source(multi_data_source *multi);
 
+void change_memory_data_source(unsigned char *mem, data_source *source, long size);
+
 #endif //SECRET_SECRET_UTIL_H

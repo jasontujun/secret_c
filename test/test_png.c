@@ -29,7 +29,7 @@ void test_mem_rw(const char *rw_inname, const char *rw_outname, int has_meta) {
 void test_file_rw(const char *rw_inname, const char *rw_outname, int has_meta) {
     // write secret into image
     secret *myse = secret_create(has_meta);
-    myse->file_path = "H:\\img_test\\secret\\src.txt";
+    myse->file_path = "H:\\img_test\\secret\\src_png.txt";
     int w_result = secret_file_hide(rw_inname, rw_outname, myse);
     printf(">>>write result=%d\n", w_result);
     secret_destroy(myse);
@@ -39,12 +39,12 @@ void test_file_rw(const char *rw_inname, const char *rw_outname, int has_meta) {
 
     // read secret from image
     secret *se = secret_create(has_meta);
-    se->file_path = "H:\\img_test\\secret\\result5.txt";
+    se->file_path = "H:\\img_test\\secret\\result_png.txt";
     if (!has_meta) {
         se->size = (size_t) w_result;
     }
     int r_result = secret_file_dig(rw_outname, se);
-    printf(">>>read result=%d, read content=%s\n", r_result, se->data);
+    printf(">>>read result=%d, check result file: %s\n", r_result, se->file_path);
     secret_destroy(se);
 }
 

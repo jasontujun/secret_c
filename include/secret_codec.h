@@ -54,16 +54,6 @@ typedef struct {
 } secret_filter;
 
 /**
- * 获取指定大小的data中包含的secret字节数。
- * 注意：如果data最后的几个字节不能隐藏1字节的secret数据，
- * 则data的最后几个字节不会计算在内。换句话说，就是向下取整的计算方式。
- * @param data_t data数据类型
- * @param data的字节大小
- * @return 返回data中所包含的secret字节数；如果无法确定，返回0。
- */
-size_t secret_volume(SECRET_CARRIER_TYPE data_t, size_t data_size);
-
-/**
  * 往data中写入secret信息(1byte的data数据包含1bit的secret信息，写入过程要算上remain中包含了不足1字节的secret信息）
  * ，因此data的长度应该是8的倍数；
  * 如果长度不是8的倍数，则把最后不足8的data数据存入remain中(如果secret已全部写入，remain会清0)，以方便下次调用该方法。

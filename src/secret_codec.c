@@ -10,8 +10,9 @@
 #define to_odd(type, data) (data & 0x01 ? data : (type) (data | 0x0001))
 #endif
 
+// LSB变换最低位时，为了避免最终结果变成0(往往0有一些特殊含义)，会转化为0x02
 #ifndef to_even
-#define to_even(type, data) (data & 0x01 ? (type) (data & 0xfffe) : data)
+#define to_even(type, data) (data & 0x01 ? ((type) (data & 0xfffe) ? (type) (data & 0xfffe) : (type) (2)) : data)
 #endif
 
 #ifndef to_lsb
@@ -103,10 +104,6 @@ static int carrier_get_bit(SECRET_CARRIER_TYPE data_t, void *data_p, int index) 
         default:
             return 0;
     }
-}
-
-size_t secret_volume(SECRET_CARRIER_TYPE data_t, size_t data_size) {
-    return data_size / 8;
 }
 
 int secret_hide(SECRET_CARRIER_TYPE data_t, void *data_p, int data_offset, size_t data_size,
@@ -204,7 +201,9 @@ int secret_dig(SECRET_CARRIER_TYPE data_t, void *data_p, int data_offset, size_t
             secret_p[secret_offset + read_secret_size] = tmp_byte;
             read_secret_size++;
             tmp_byte = 0;
-            remain->size = 0;
+            if (remain) {
+                remain->size = 0;
+            }
         }
         read_data_size++;
     }

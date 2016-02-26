@@ -527,4 +527,14 @@ void destroy_multi_data_source(multi_data_source *multi) {
     free(multi);
 }
 
+void change_memory_data_source(unsigned char *mem, data_source *source, long size) {
+    if (!mem || !source || size < 0) {
+        return;
+    }
+    mem_data *data = source->data;
+    data->mem = mem;
+    data->pos = 0;
+    source->size = size;
+}
+
 // =============== data_source相关代码[end] =============== //

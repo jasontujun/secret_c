@@ -51,20 +51,6 @@ if(TEST_META)
 endif()
 
 
-if(TEST_JPEG)
-    message("fuck jpeg!!!")
-    add_definitions("-DSUPPORT_FORMAT_JPEG")
-    remove_definitions("-DSUPPORT_FORMAT_PNG")
-    add_executable(test_jpeg
-            ${libjpeg_header}
-            ${secret_header}
-            ${secret_base_src}
-            src/secret_file_jpeg.c
-            test/test_jpeg.c)
-    target_link_libraries(test_jpeg ${PROJECT_SOURCE_DIR}/lib/libjpeg.dll)
-endif()
-
-
 if(TEST_PNG)
     message("fuck png!!!")
     add_definitions("-DSUPPORT_FORMAT_PNG")
@@ -77,4 +63,19 @@ if(TEST_PNG)
             src/secret_file_png.c
             test/test_png.c)
     target_link_libraries(test_png ${PROJECT_SOURCE_DIR}/lib/libpng16d.dll ${ZLIB_LIBRARY})
+endif()
+
+
+if(TEST_JPEG)
+    message("fuck jpeg!!!")
+    add_definitions("-DSUPPORT_FORMAT_JPEG")
+    remove_definitions("-DSUPPORT_FORMAT_PNG")
+    add_executable(test_jpeg
+            ${libjpeg_header}
+            ${zlib_header}
+            ${secret_header}
+            ${secret_base_src}
+            src/secret_file_jpeg.c
+            test/test_jpeg.c)
+    target_link_libraries(test_jpeg ${PROJECT_SOURCE_DIR}/lib/libjpeg.dll ${ZLIB_LIBRARY})
 endif()
