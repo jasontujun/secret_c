@@ -17,6 +17,15 @@ void test_volume(const char *rw_inname, int has_meta) {
     printf(">>>file_size=%d byte, volume=%d byte, storage_rate=%f\n", file_size, volume, storage_rate);
 }
 
+void test_parse_meta(const char *rw_inname) {
+    secret *se = secret_create(1);
+    if (secret_file_meta(rw_inname, se)) {
+        printf(">>>parse_meta success! %s is a secret file. data_size=%d\n", rw_inname, se->size);
+    } else {
+        printf(">>>parse_meta fail! %s is not a secret file.\n", rw_inname);
+    }
+}
+
 void test_mem_rw(const char *rw_inname, const char *rw_outname, int has_meta) {
     // write secret into image
     secret *myse = secret_create(has_meta);
@@ -71,6 +80,8 @@ int main(int argc, char *argv[]) {
 
     test_volume(volume_inname, 1);
     test_mem_rw(rw_inname, rw_outname, 1);
+    test_parse_meta(rw_inname);
+    test_parse_meta(rw_outname);
     test_file_rw(rw_inname, rw_outname, 1);
 
     return 0;

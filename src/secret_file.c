@@ -95,10 +95,10 @@ size_t secret_file_volume(const char *se_file, int has_meta) {
     }
 }
 
-int secret_file_meta(const char *se_file, secret *result) {
+int secret_file_meta(const char *se_file, secret *se) {
     secret_file_handler *handler = choose_handler(se_file);
     if (handler) {
-        return handler->secret_file_meta(se_file, result);
+        return handler->secret_file_meta(se_file, se);
     } else {
         return ERROR_COMMON_FORMAT_NOT_SUPPORT;
     }

@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include "secret_struct.h"
 
+// 通用错误码
 #define ERROR_COMMON_PARAM_NULL -1
 #define ERROR_COMMON_FORMAT_NOT_SUPPORT -2
 #define ERROR_COMMON_VOLUME_INSUFFICIENT -3
@@ -39,7 +40,7 @@ typedef struct {
      */
     int (*secret_file_format)(FILE *se_file);
     size_t (*secret_file_volume)(const char *se_file, int has_meta);
-    int (*secret_file_meta)(const char *se_file, secret *result);
+    int (*secret_file_meta)(const char *se_file, secret *se);
     int (*secret_file_dig)(const char *se_file, secret *se);
     int (*secret_file_hide)(const char *se_input_file, const char *se_output_file, secret *se);
 } secret_file_handler;
@@ -77,10 +78,10 @@ size_t secret_file_volume(const char *se_file, int has_meta);
 /**
  * 获取指定文件的secret的meta信息。
  * @param se_file 文件的绝对路径(非空)。
- * @param result 获取的meta信息结果存放在secret结构体中。
+ * @param se 获取的meta信息结果存放在secret结构体中。
  * @return 获取成功返回非0；获取失败返回0。
  */
-int secret_file_meta(const char *se_file, secret *result);
+int secret_file_meta(const char *se_file, secret *se);
 
 /**
  * 从指定的图片文件中提取secret信息。
@@ -96,18 +97,7 @@ int secret_file_meta(const char *se_file, secret *result);
  * @param image_file 图片文件的绝对路径(非空)。
  * @param se secret结构体，表示secret信息(非空)。
  * @return 如果提取成功，返回提取secret信息的字节数(包含meta信息和crc校验码,大于等于0)；
- *         如果提取失败，返回对应的错误码(小于0)：
- *          -1：传入参数为空或非法；
- *          -2：文件读方式打开失败；
- *          -3：文件格式错误，或文件格式不支持；
- *          -4：文件读操作出错；
- *          -5：图片interlace属性不合法，无法解析；
- *          -6：图片color_type属性不合法，无法解析；
- *          -7：文件能包含的最大secret字节数小于要求的期望字节数；
- *          -8：secret文件写方式打开失败；
- *          -9：secret存储为文件时出错；
- *          -10：meta信息格式出错
- *          -11：crc校验失败
+ *         如果提取失败，返回对应的错误码(小于0)(详情请参考secret_file.h的通用错误码).
  */
 int secret_file_dig(const char *se_file, secret *se);
 
@@ -123,21 +113,7 @@ int secret_file_dig(const char *se_file, secret *se);
  * @param min_size 最小写入字节数。如果该值小于等于0，表示没有最小写入字节数限制，
  * 能写入多少secret信息就写入多少，否则表示至少写入指定字节数的secret信息。
  * @return 如果写入成功，返回写入secret信息的字节数(包含meta信息和crc校验码,大于等于0)；
- *         如果写入失败，返回对应的错误码(小于0)：
- *          -1：传入参数为空或非法；
- *          -2：secret文件读方式打开失败；
- *          -3：输入图片文件读方式打开失败；
- *          -4：输入图片文件格式错误，或图片格式不支持；
- *          -5：输出图片文件写方式打开失败；
- *          -6：输入图片文件读操作出错；
- *          -7：输出图片文件写操作出错；
- *          -8：输入图片interlace属性不合法，无法解析；
- *          -9：输入图片color_type属性不合法，无法解析；
- *          -10：输入图片能包含的最大字节数无法满足secret大小；
- *          -11：secret文件大小为0；
- *          -12：secret文件读操作出错；
- *          -13：meta信息创建失败；
- *          -14：crc计算出错；
+ *         如果写入失败，返回对应的错误码(小于0)(详情请参考secret_file.h的通用错误码).
  */
 int secret_file_hide(const char *se_input_file,
                      const char *se_output_file,

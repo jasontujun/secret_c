@@ -97,8 +97,27 @@ static int wrapper_is_effective(void *data_p, int index, void *param) {
     JCOEF *data_coef_p = data_p;
     return data_coef_p[index] == 0 ? 0 : 1;// 当前位置为
 }
-
 // ========================== secret_filter的相关参数[end] ========================== //
+
+
+// ========================== 解析meta过程中的回调函数[start] ========================== //
+typedef struct {
+    int parse_result;// 解析结果：0表示未解析，1表示解析成功，-1表示解析失败
+    secret *se;
+} meta_parse_meta_param;
+
+// 在解析实际secret的meta部分完成后的回调函数，解析meta的内容。
+static void wrapper_meta_parse_meta(void *data, long size, void *param) {
+    meta_parse_meta_param *meta_param = param;
+    if (secret_get_meta(data, (size_t) size, meta_param->se) > 0) {
+        jpeg_debug1("[secret_jpeg_meta]Meta success! data size = %d", meta_param->se->size);
+        meta_param->parse_result = 1;
+    } else {
+        jpeg_debug("[secret_jpeg_meta]Meta error!");
+        meta_param->parse_result = -1;
+    }
+}
+// ========================== 解析meta过程中的回调函数[end] ========================== //
 
 
 // ========================== dig过程中的回调函数[start] ========================== //
@@ -109,17 +128,17 @@ typedef struct {
     data_source *ds_data;
     unsigned char **secret_memory;
     size_t *secret_total_size;
-} parse_meta_param;
+} dig_parse_meta_param;
 
 // 在解析实际secret的meta部分完成后的回调函数，解析meta的内容。
 static void wrapper_dig_parse_meta(void *data, long size, void *param) {
-    parse_meta_param *meta_param = param;
+    dig_parse_meta_param *meta_param = param;
     if (secret_get_meta(data, (size_t) size, meta_param->se) > 0) {
         jpeg_debug1("[secret_jpeg_dig]Meta success! data size = %d", meta_param->se->size);
         meta_param->parse_result = 1;
         // 更新secret的data部分大小和总大小
         if (!meta_param->se->file_path) {
-            free(*(meta_param->secret_memory));// 先回手之前申请的内存
+            free(*(meta_param->secret_memory));// 先回收之前申请的内存
             *(meta_param->secret_memory) = malloc(meta_param->se->size);
             change_memory_data_source(*(meta_param->secret_memory), meta_param->ds_data, (long) meta_param->se->size);
         }
@@ -137,7 +156,6 @@ static void wrapper_dig_cal_crc(void *data, size_t size, void *param) {
     secret *se = param;
     se->meta->crc = secret_cal_crc2(se->meta->crc, d, size);
 }
-
 // ========================== dig过程中的回调函数[start] ========================== //
 
 
@@ -229,8 +247,130 @@ static size_t secret_jpeg_volume(const char *se_file, int has_meta) {
     return secret_volume_size;
 }
 
-static int secret_jpeg_meta(const char *se_file, secret *result) {
-    return 0;
+static int secret_jpeg_meta(const char *se_file, secret *se) {
+    if (!se_file || !se || !se->meta) {
+        return 0;
+    }
+
+    struct jpeg_decompress_struct srcinfo;
+    struct my_error_mgr jsrcerr;
+    jvirt_barray_ptr *coef_arrays;
+    FILE * infile;		/* source file */
+    unsigned char *secret_buf = NULL;// secret提取过程的缓冲区
+    unsigned char *meta_buf = NULL;// meta信息的缓冲区
+    multi_data_source *ds = NULL;// 多重数据源
+
+    if ((infile = fopen(se_file, "rb")) == NULL) {
+        jpeg_debug1("[secret_jpeg_meta]Could not find input file %s", se_file);
+        return 0;
+    }
+
+    // ================== 统一出错处理代码[start] ================== //
+    if (0) {
+        EXCEPTION:
+        jpeg_destroy_decompress(&srcinfo);
+        fclose(infile);
+        free(secret_buf);
+        free(meta_buf);
+        destroy_multi_data_source(ds);
+        return 0;
+    }
+    // ================== 统一出错处理代码[end] ================== //
+
+    /* Establish the setjmp return context for my_error_exit to use. */
+    srcinfo.err = jpeg_std_error(&jsrcerr.pub);
+    jsrcerr.pub.error_exit = my_error_exit;
+    if (setjmp(jsrcerr.setjmp_buffer)) {
+        jpeg_debug("[secret_jpeg_meta]decompress error!\n");
+        goto EXCEPTION;
+    }
+    jpeg_create_decompress(&srcinfo);
+    srcinfo.mem->max_memory_to_use = 2 * 1024 *1024;
+
+    /* specify data source (eg, a file) */
+    jpeg_stdio_src(&srcinfo, infile);
+
+    /* read file parameters with jpeg_read_header() */
+    jpeg_read_header(&srcinfo, TRUE);
+
+    /* Read source file as DCT coefficients */
+    coef_arrays = jpeg_read_coefficients(&srcinfo);
+
+    // 创建secret缓存区
+    const size_t secret_buf_size = DCTSIZE2 / 8 + 2;// 为一行的最大secret数，考虑到余数，必须再加2！
+    secret_buf = malloc(secret_buf_size);
+    jpeg_debug1("[secret_jpeg_meta]Allocating secret buffer...secret_size = %d", secret_buf_size);
+    // 创建多重数据源
+    data_source *secret_meta_ds;// 创建secret的meta数据源
+    meta_buf = malloc(SECRET_META_LENGTH);
+    secret_meta_ds = create_memory_data_source(meta_buf, SECRET_META_LENGTH);
+    data_source *source_list[1] = {secret_meta_ds};
+    ds = create_multi_data_source(source_list, 1);
+    // 设置相关meta信息的处理和crc校验
+    meta_parse_meta_param meta_param = {
+            .se = se,
+            .parse_result = 0
+    };
+    secret_meta_ds->set_write_full_callback(secret_meta_ds, &meta_param, wrapper_meta_parse_meta);
+    // 定义remainder和filter回调
+    JCOEF r_buf[7];
+    secret_remainder remain = {
+            .size = 0,
+            .data = r_buf
+    };
+    secret_filter filter = {
+            .param = NULL,
+            .is_effective = wrapper_is_effective
+    };
+    // 遍历DCT矩阵
+    int dig_result;
+    size_t secret_total_read = 0;
+    jpeg_component_info *compptr;
+    JDIMENSION block_num;
+    JBLOCKARRAY buffer_array;
+    JBLOCKROW buffer_row;
+    JDIMENSION height_sample_index;
+    int ci, ri;
+    for (ci = 0; ci < srcinfo.num_components; ci++) {
+        compptr = srcinfo.comp_info + ci;
+        for (height_sample_index = 0; height_sample_index < compptr->height_in_blocks;
+             height_sample_index += compptr->v_samp_factor) {
+            buffer_array = (*srcinfo.mem->access_virt_barray)
+                    ((j_common_ptr) (&srcinfo), coef_arrays[ci], height_sample_index,
+                     (JDIMENSION) compptr->v_samp_factor, FALSE);
+            for (ri = 0; ri < compptr->v_samp_factor; ri++) {
+                buffer_row = buffer_array[ri];
+                for (block_num = 0; block_num < compptr->width_in_blocks; block_num++) {
+                    dig_result = secret_dig(S_SHORT, buffer_row[block_num], 0, DCTSIZE2,
+                                            secret_buf, 0, secret_buf_size,
+                                            &remain, &filter);
+                    if (dig_result > 0) {
+                        secret_total_read += dig_result;
+                        ds->write(ds, (size_t) dig_result, secret_buf);
+                        if (meta_param.parse_result < 0) {
+                            // meta信息解析失败
+                            jpeg_debug("[secret_jpeg_meta]meta parse error!");
+                            goto EXCEPTION;
+                        } else if (meta_param.parse_result > 0) {
+                            // meta信息解析成功
+                            jpeg_debug("[secret_jpeg_meta]meta parse success!");
+                            goto FINISH;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    FINISH:
+    /* Finish compression and release memory */
+    jpeg_finish_decompress(&srcinfo);
+    jpeg_destroy_decompress(&srcinfo);
+    fclose(infile);
+    free(secret_buf);
+    free(meta_buf);
+    destroy_multi_data_source(ds);
+    return 1;
 }
 
 static int secret_jpeg_dig(const char *se_file, secret *se) {
@@ -315,7 +455,7 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
     data_source *secret_meta_ds;// 创建secret的meta数据源
     data_source *secret_data_ds;// 创建secret内容数据源
     data_source *secret_crc_ds;// 创建secret的crc数据源
-    parse_meta_param meta_param;
+    dig_parse_meta_param meta_param;
     if (se->file_path) {
         if ((secret_file = fopen(se->file_path, "wb")) == NULL) {
             jpeg_debug1("[secret_jpeg_dig]Could not find secret file %s", se->file_path);
@@ -335,7 +475,7 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
         data_source *source_list[3] = {secret_meta_ds, secret_data_ds, secret_crc_ds};
         ds = create_multi_data_source(source_list, 3);
         // 设置相关meta信息的处理和crc校验
-        parse_meta_param tmp_meta_param = {
+        dig_parse_meta_param tmp_meta_param = {
                 .se = se,
                 .parse_result = 0,
                 .ds = ds,
@@ -387,11 +527,9 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
                         ds->write(ds, (size_t) dig_result, secret_buf);
                         // meta信息解析失败
                         if (se->meta && meta_param.parse_result < 0) {
-                            if (meta_param.parse_result == -1) {
-                                jpeg_debug("[secret_jpeg_dig]meta parse error!");
-                                error_code = ERROR_COMMON_META_PARSE_FAIL;
-                                goto EXCEPTION;
-                            }
+                            jpeg_debug("[secret_jpeg_dig]meta parse error!");
+                            error_code = ERROR_COMMON_META_PARSE_FAIL;
+                            goto EXCEPTION;
                         }
                         // 读取的secret内容已达到指定的长度，退出循环
                         if (secret_total_read >= secret_total_size) {

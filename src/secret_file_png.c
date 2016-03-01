@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <secret_struct.h>
 #include "png.h"
 #include "secret_file.h"
 #include "secret_codec.h"
@@ -230,8 +231,27 @@ static int wrapper_is_effective(void *data_p, int index, void *param) {
     interlace_param *p = param;
     return col_is_adam7(index, p->pass, p->color_type);
 }
-
 // ========================== secret_filter的相关参数[end] ========================== //
+
+
+// ========================== 解析meta过程中的回调函数[start] ========================== //
+typedef struct {
+    int parse_result;// 解析结果：0表示未解析，1表示解析成功，-1表示解析失败
+    secret *se;
+} meta_parse_meta_param;
+
+// 在解析实际secret的meta部分完成后的回调函数，解析meta的内容。
+static void wrapper_meta_parse_meta(void *data, long size, void *param) {
+    meta_parse_meta_param *meta_param = param;
+    if (secret_get_meta(data, (size_t) size, meta_param->se) > 0) {
+        png_debug1("[secret_png_meta]Meta success! data size = %d", meta_param->se->size);
+        meta_param->parse_result = 1;
+    } else {
+        png_debug("[secret_png_meta]Meta error!");
+        meta_param->parse_result = -1;
+    }
+}
+// ========================== 解析meta过程中的回调函数[end] ========================== //
 
 
 // ========================== dig过程中的回调函数[start] ========================== //
@@ -243,11 +263,11 @@ typedef struct {
     unsigned char **secret_memory;
     size_t *secret_total_size;
     size_t max_secret_size;
-} parse_meta_param;
+} dig_parse_meta_param;
 
 // 在解析实际secret的meta部分完成后的回调函数，解析meta的内容。
 static void wrapper_dig_parse_meta(void *data, long size, void *param) {
-    parse_meta_param *meta_param = param;
+    dig_parse_meta_param *meta_param = param;
     if (secret_get_meta(data, (size_t) size, meta_param->se) > 0) {
         // 取得真正的data数据大小后，验证一下是否超越了容量上限
         if (meta_param->se->size + SECRET_META_LENGTH + SECRET_CRC_LENGTH > meta_param->max_secret_size
@@ -278,8 +298,8 @@ static void wrapper_dig_cal_crc(void *data, size_t size, void *param) {
     secret *se = param;
     se->meta->crc = secret_cal_crc2(se->meta->crc, d, size);
 }
-
 // ========================== dig过程中的回调函数[start] ========================== //
+
 
 static int check_png(FILE *file) {
     png_byte png_signature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
@@ -342,8 +362,169 @@ static size_t secret_png_volume(const char *se_file, int has_meta) {
     return secret_volume_size;
 }
 
-static int secret_png_meta(const char *se_file, secret *result) {
-    return 0;
+static int secret_png_meta(const char *se_file, secret *se) {
+    if (!se_file || !se || !se->meta) {
+        return 0;
+    }
+
+    /* "static" prevents setjmp corruption */
+    static png_FILE_p fpin;
+    png_structp read_ptr;
+    png_infop read_info_ptr;
+
+    int num_pass = 1, pass;
+    png_bytep row_buf = NULL;// 一行像素的缓冲区
+    unsigned char *secret_buf = NULL;// secret提取过程的缓冲区
+    unsigned char *meta_buf = NULL;// meta信息的缓冲区
+    multi_data_source *ds = NULL;// 多重数据源
+
+    if ((fpin = fopen(se_file, "rb")) == NULL) {
+        png_debug1("[secret_png_meta]Could not find input file %s", se_file);
+        return ERROR_COMMON_FILE_R_OPEN_FAIL;
+    }
+
+    png_debug("[secret_png_meta]Allocating read structures");
+#if defined(PNG_USER_MEM_SUPPORTED) && PNG_DEBUG
+    read_ptr = png_create_read_struct_2(PNG_LIBPNG_VER_STRING, NULL,
+                                        NULL, NULL, NULL, png_debug_malloc, png_debug_free);
+#else
+    read_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, NULL, NULL, NULL);
+#endif
+    png_debug("[secret_png_meta]Allocating read_info structures");
+    read_info_ptr = png_create_info_struct(read_ptr);
+
+    // ================== 统一出错处理代码[start] ================== //
+    if (0) {
+        EXCEPTION:
+        png_free(read_ptr, row_buf);
+        row_buf = NULL;
+        png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
+        fclose(fpin);
+        free(secret_buf);
+        free(meta_buf);
+        destroy_multi_data_source(ds);
+        return 0;
+    }
+        // ================== 统一出错处理代码[end] ================== //
+
+#ifdef PNG_SETJMP_SUPPORTED
+    png_debug("[secret_png_meta]Setting jmpbuf for read struct");
+    if (setjmp(png_jmpbuf(read_ptr))) {
+        png_debug1("[secret_png_meta]%s: libpng read error", se_file);
+        goto EXCEPTION;
+    }
+#endif
+
+    /* Allow application (pngtest) errors and warnings to pass */
+    png_set_benign_errors(read_ptr, 1);
+
+    png_debug("[secret_png_meta]Initializing input streams");
+    png_init_io(read_ptr, fpin);
+
+    png_debug("[secret_png_meta]Reading info struct");
+    png_read_info(read_ptr, read_info_ptr);
+
+    png_uint_32 width = png_get_image_width(read_ptr,read_info_ptr);
+    png_uint_32 height = png_get_image_height(read_ptr,read_info_ptr);
+    png_byte bit_depth = png_get_bit_depth(read_ptr,read_info_ptr);
+    png_byte color_type = png_get_color_type(read_ptr,read_info_ptr);
+    png_byte interlace_type = png_get_interlace_type(read_ptr,read_info_ptr);
+    png_debug1("[secret_png_meta]image width %d", width);
+    png_debug1("[secret_png_meta]image height %d", height);
+    png_debug1("[secret_png_meta]image bit_depth %d", bit_depth);
+    png_debug1("[secret_png_meta]image color_type %d", color_type);
+    png_debug1("[secret_png_meta]image interlace_type %d", interlace_type);
+
+#ifdef PNG_READ_INTERLACING_SUPPORTED
+    num_pass = png_set_interlace_handling(read_ptr);
+    if (num_pass != 1 && num_pass != 7) {
+        png_debug1("[secret_png_meta]Image interlace_pass error!! interlace_pass=%d, cannot hide secret!", num_pass);
+        goto EXCEPTION;
+    }
+#endif
+
+    // 计算该图片的secret最大容量
+    const size_t max_secret_size = (width * height * get_color_bytes(color_type)) / 8;
+    const size_t min_secret_size = SECRET_META_LENGTH + SECRET_CRC_LENGTH;// secret容量最小值为24+4
+    if (max_secret_size < min_secret_size) {
+        png_debug1("[secret_png_meta]Max secret size less then min size: %d!", min_secret_size);
+        goto EXCEPTION;
+    }
+    // 创建row缓冲区
+    png_size_t row_buf_size = png_get_rowbytes(read_ptr, read_info_ptr);
+    row_buf = (png_bytep)png_malloc(read_ptr, row_buf_size);
+    png_debug1("[secret_png_meta]Allocating row buffer...row_buf_size = %d", row_buf_size);
+    // 创建secret缓存区
+    const size_t secret_buf_size = row_buf_size / 8 + 2;// 为一行的最大secret数，考虑到余数，必须再加2！
+    secret_buf = malloc(secret_buf_size);
+    png_debug1("[secret_png_meta]Allocating secret buffer...secret_size = %d", secret_buf_size);
+    // 创建多重数据源
+    data_source *secret_meta_ds;// 创建secret的meta数据源
+    meta_buf = malloc(SECRET_META_LENGTH);
+    secret_meta_ds = create_memory_data_source(meta_buf, SECRET_META_LENGTH);
+    data_source *source_list[1] = {secret_meta_ds};
+    ds = create_multi_data_source(source_list, 1);
+    // 设置相关meta信息的处理
+    meta_parse_meta_param meta_param = {
+            .se = se,
+            .parse_result = 0
+    };
+    secret_meta_ds->set_write_full_callback(secret_meta_ds, &meta_param, wrapper_meta_parse_meta);
+    // 定义remainder和filter回调
+    interlace_param param = {
+            .color_type = color_type
+    };
+    unsigned char r_buf[7];
+    secret_remainder remain = {
+            .size = 0,
+            .data = r_buf
+    };
+    secret_filter filter = {
+            .param = &param,
+            .is_effective = wrapper_is_effective
+    };
+    // 逐行解析图片
+    int y;
+    int dig_result;
+    size_t secret_total_read = 0;
+    for (pass = 0; pass < num_pass; pass++) {
+        png_debug1("[secret_png_meta]Reading row data for pass %d", pass);
+        for (y = 0; y < height; y++) {
+            png_read_row(read_ptr, row_buf, NULL);
+            // 如果不是adam7有效行，直接跳过
+            if (!row_is_adam7(y, num_pass > 1 ? pass : -1)) {
+                continue;
+            }
+            // 如果是adam7有效行，提取secret
+            param.pass = num_pass > 1 ? pass : -1;
+            dig_result = secret_dig(S_U_CHAR, row_buf, 0, row_buf_size,
+                                    secret_buf, 0, secret_buf_size,
+                                    &remain, &filter);
+            if (dig_result > 0) {
+                secret_total_read += dig_result;
+                ds->write(ds, (size_t) dig_result, secret_buf);
+                if (meta_param.parse_result < 0) {
+                    // meta信息解析失败
+                    png_debug("[secret_png_meta]meta parse error!");
+                    goto EXCEPTION;
+                } else if (meta_param.parse_result > 0) {
+                    // meta信息解析成功
+                    png_debug("[secret_png_meta]meta parse success!");
+                    goto FINISH;
+                }
+            }
+        }
+    }
+
+    FINISH:
+    png_free(read_ptr, row_buf);
+    row_buf = NULL;
+    png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
+    fclose(fpin);
+    free(secret_buf);
+    free(meta_buf);
+    destroy_multi_data_source(ds);
+    return 1;
 }
 
 static int secret_png_dig(const char *se_file, secret *se) {
@@ -400,7 +581,7 @@ static int secret_png_dig(const char *se_file, secret *se) {
         }
         return error_code;
     }
-    // ================== 统一出错处理代码[end] ================== //
+        // ================== 统一出错处理代码[end] ================== //
 
 #ifdef PNG_SETJMP_SUPPORTED
     png_debug("[secret_png_dig]Setting jmpbuf for read struct");
@@ -479,7 +660,7 @@ static int secret_png_dig(const char *se_file, secret *se) {
     data_source *secret_meta_ds;// 创建secret的meta数据源
     data_source *secret_data_ds;// 创建secret内容数据源
     data_source *secret_crc_ds;// 创建secret的crc数据源
-    parse_meta_param meta_param;
+    dig_parse_meta_param meta_param;
     if (se->file_path) {
         if ((secret_file = fopen(se->file_path, "wb")) == NULL) {
             png_debug1("[secret_png_dig]Could not find secret file %s", se->file_path);
@@ -499,7 +680,7 @@ static int secret_png_dig(const char *se_file, secret *se) {
         data_source *source_list[3] = {secret_meta_ds, secret_data_ds, secret_crc_ds};
         ds = create_multi_data_source(source_list, 3);
         // 设置相关meta信息的处理和crc校验
-        parse_meta_param tmp_meta_param = {
+        dig_parse_meta_param tmp_meta_param = {
                 .se = se,
                 .parse_result = 0,
                 .ds = ds,
@@ -543,18 +724,16 @@ static int secret_png_dig(const char *se_file, secret *se) {
             // 如果是adam7有效行，提取secret
             param.pass = num_pass > 1 ? pass : -1;
             dig_result = secret_dig(S_U_CHAR, row_buf, 0, row_buf_size,
-                                     secret_buf, 0, secret_buf_size,
-                                     &remain, &filter);
+                                    secret_buf, 0, secret_buf_size,
+                                    &remain, &filter);
             if (dig_result > 0) {
                 secret_total_read += dig_result;
                 ds->write(ds, (size_t) dig_result, secret_buf);
                 // meta信息解析失败
                 if (se->meta && meta_param.parse_result < 0) {
-                    if (meta_param.parse_result == -1) {
-                        png_debug("[secret_png_dig]meta parse error!");
-                        error_code = ERROR_COMMON_META_PARSE_FAIL;
-                        goto EXCEPTION;
-                    }
+                    png_debug("[secret_png_dig]meta parse error!");
+                    error_code = ERROR_COMMON_META_PARSE_FAIL;
+                    goto EXCEPTION;
                 }
                 // 读取的secret内容已达到指定的长度，退出循环
                 if (secret_total_read >= secret_total_size) {
