@@ -69,7 +69,7 @@ int secret_unregister_handler(char* format);
 /**
  * 获取指定文件能包含的最大secret字节大小。
  * @param se_file 文件的绝对路径(非空)。
- * @param has_meta 是否计算meta信息大小(计算则设为1，否则设为0)
+ * @param has_meta 是否减去meta信息大小(减去则设为1，否则设为0)
  * @return 返回指定文件能包含的最大secret字节大小；获取失败返回0。
  */
 size_t secret_file_volume(const char *se_file, int has_meta);

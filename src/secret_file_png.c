@@ -326,24 +326,20 @@ static size_t secret_png_volume(const char *se_file, int has_meta) {
 
     png_uint_32 width = png_get_image_width(read_ptr,read_info_ptr);
     png_uint_32 height = png_get_image_height(read_ptr,read_info_ptr);
-    png_byte bit_depth = png_get_bit_depth(read_ptr,read_info_ptr);
     png_byte color_type = png_get_color_type(read_ptr,read_info_ptr);
-    png_byte interlace_type = png_get_interlace_type(read_ptr,read_info_ptr);
     png_debug1("[secret_png_volume]image width %d", width);
     png_debug1("[secret_png_volume]image height %d", height);
-    png_debug1("[secret_png_volume]image bit_depth %d", bit_depth);
     png_debug1("[secret_png_volume]image color_type %d", color_type);
-    png_debug1("[secret_png_volume]image interlace_type %d", interlace_type);
-
-    size_t max_secret_size = (width * height * get_color_bytes(color_type)) / 8;
-    if (has_meta) {
-        max_secret_size = max(max_secret_size, SECRET_META_LENGTH) - SECRET_META_LENGTH;
-    }
 
     png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
     fclose(fpin);
 
-    return max_secret_size;
+    size_t secret_volume_size = (width * height * get_color_bytes(color_type)) / 8;
+    if (has_meta) {
+        secret_volume_size = max(secret_volume_size, SECRET_META_LENGTH + SECRET_CRC_LENGTH)
+                             - (SECRET_META_LENGTH + SECRET_CRC_LENGTH);
+    }
+    return secret_volume_size;
 }
 
 static int secret_png_meta(const char *se_file, secret *result) {

@@ -39,7 +39,6 @@ set(secret_base_src
         src/secret_util.c)
 
 if(TEST_META)
-    message("fuck meta!!!")
     add_executable(test_meta
             ${zlib_header}
             ${secret_header}
@@ -52,7 +51,6 @@ endif()
 
 
 if(TEST_PNG)
-    message("fuck png!!!")
     add_definitions("-DSUPPORT_FORMAT_PNG")
     remove_definitions("-DSUPPORT_FORMAT_JPEG")
     add_executable(test_png
@@ -67,7 +65,6 @@ endif()
 
 
 if(TEST_JPEG)
-    message("fuck jpeg!!!")
     add_definitions("-DSUPPORT_FORMAT_JPEG")
     remove_definitions("-DSUPPORT_FORMAT_PNG")
     add_executable(test_jpeg

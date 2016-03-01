@@ -147,7 +147,86 @@ static int check_jpeg(FILE *file) {
 }
 
 static size_t secret_jpeg_volume(const char *se_file, int has_meta) {
-    return 0;
+    if (!se_file) {
+        return 0;
+    }
+
+    struct jpeg_decompress_struct srcinfo;
+    struct my_error_mgr jsrcerr;
+    jvirt_barray_ptr *coef_arrays;
+    FILE * infile;		/* source file */
+
+    if ((infile = fopen(se_file, "rb")) == NULL) {
+        jpeg_debug1("[secret_jpeg_dig]Could not find input file %s", se_file);
+        return 0;
+    }
+
+    // ================== 统一出错处理代码[start] ================== //
+    int error_code = 0;
+    EXCEPTION: if (error_code != 0) {
+        jpeg_destroy_decompress(&srcinfo);
+        fclose(infile);
+        return 0;
+    }
+    // ================== 统一出错处理代码[end] ================== //
+
+    srcinfo.err = jpeg_std_error(&jsrcerr.pub);
+    jsrcerr.pub.error_exit = my_error_exit;
+    if (setjmp(jsrcerr.setjmp_buffer)) {
+        jpeg_debug("[secret_jpeg_dig]decompress error!\n");
+        error_code = ERROR_COMMON_FILE_READ_FAIL;
+        goto EXCEPTION;
+    }
+    jpeg_create_decompress(&srcinfo);
+    srcinfo.mem->max_memory_to_use = 2 * 1024 *1024;
+
+    /* specify data source (eg, a file) */
+    jpeg_stdio_src(&srcinfo, infile);
+
+    /* read file parameters with jpeg_read_header() */
+    jpeg_read_header(&srcinfo, TRUE);
+
+    /* Read source file as DCT coefficients */
+    coef_arrays = jpeg_read_coefficients(&srcinfo);
+
+    // 遍历DCT矩阵
+    size_t secret_volume_size = 0;
+    jpeg_component_info *compptr;
+    JDIMENSION block_num;
+    JBLOCKARRAY buffer_array;
+    JBLOCKROW buffer_row;
+    JDIMENSION height_sample_index;
+    int ci, ri, bi;
+    for (ci = 0; ci < srcinfo.num_components; ci++) {
+        compptr = srcinfo.comp_info + ci;
+        for (height_sample_index = 0; height_sample_index < compptr->height_in_blocks;
+             height_sample_index += compptr->v_samp_factor) {
+            buffer_array = (*srcinfo.mem->access_virt_barray)
+                    ((j_common_ptr) (&srcinfo), coef_arrays[ci], height_sample_index,
+                     (JDIMENSION) compptr->v_samp_factor, FALSE);
+            for (ri = 0; ri < compptr->v_samp_factor; ri++) {
+                buffer_row = buffer_array[ri];
+                for (block_num = 0; block_num < compptr->width_in_blocks; block_num++) {
+                    for (bi = 0; bi < DCTSIZE2; bi++) {
+                        if (buffer_row[block_num][bi] != 0) {
+                            secret_volume_size++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /* Finish compression and release memory */
+    jpeg_finish_decompress(&srcinfo);
+    jpeg_destroy_decompress(&srcinfo);
+    fclose(infile);
+
+    secret_volume_size = secret_volume_size / 8;
+    if (has_meta) {
+        secret_volume_size = max(secret_volume_size, SECRET_META_LENGTH + SECRET_CRC_LENGTH)
+                             - (SECRET_META_LENGTH + SECRET_CRC_LENGTH);
+    }
+    return secret_volume_size;
 }
 
 static int secret_jpeg_meta(const char *se_file, secret *result) {
@@ -209,7 +288,7 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
     jpeg_stdio_src(&srcinfo, infile);
 
     /* read file parameters with jpeg_read_header() */
-    (void) jpeg_read_header(&srcinfo, TRUE);
+    jpeg_read_header(&srcinfo, TRUE);
 
     /* Read source file as DCT coefficients */
     coef_arrays = jpeg_read_coefficients(&srcinfo);
@@ -284,7 +363,6 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
     // 解析DCT矩阵
     int dig_result;
     size_t secret_total_read = 0;
-    int total_block = 0;
     jpeg_component_info *compptr;
     JDIMENSION block_num;
     JBLOCKARRAY buffer_array;
@@ -329,15 +407,12 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
                             goto FINISH;
                         }
                     }
-                    total_block++;
                 }
             }
         }
     }
 
     FINISH:
-    printf("total block = %d\n", total_block);
-
     /* Finish compression and release memory */
     jpeg_finish_decompress(&srcinfo);
     jpeg_destroy_decompress(&srcinfo);
@@ -448,7 +523,7 @@ static int secret_jpeg_hide(const char *se_input_file,
     jcopy_markers_setup(&srcinfo);
 
     /* read file parameters with jpeg_read_header() */
-    (void) jpeg_read_header(&srcinfo, TRUE);
+    jpeg_read_header(&srcinfo, TRUE);
 
     /* Read source file as DCT coefficients */
     coef_arrays = jpeg_read_coefficients(&srcinfo);
@@ -570,7 +645,7 @@ static int secret_jpeg_hide(const char *se_input_file,
     }
 
     if (secret_total_write < secret_total_size) {
-        jpeg_debug1("[secret_jpeg_hide]Not enough to hold all secret! Only hold %d bytes secret",
+        jpeg_debug1("[secret_jpeg_hide]Not enough to hold all secret! Only hold %ld bytes secret",
                     secret_total_write);
         error_code = ERROR_COMMON_VOLUME_INSUFFICIENT;
         goto EXCEPTION;

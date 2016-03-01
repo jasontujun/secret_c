@@ -4,6 +4,19 @@
 
 #include "secret_file.h"
 
+void test_volume(const char *rw_inname, int has_meta) {
+    size_t file_size = 0;
+    FILE *img_file;
+    if ((img_file = fopen(rw_inname, "rb")) != NULL) {
+        fseek(img_file, 0, SEEK_END);
+        file_size = (size_t) ftell(img_file);
+        fclose(img_file);
+    }
+    size_t volume = secret_file_volume(rw_inname, has_meta);
+    float storage_rate = (float) volume / (float) file_size;
+    printf(">>>file_size=%d byte, volume=%d byte, storage_rate=%f\n", file_size, volume, storage_rate);
+}
+
 void test_mem_rw(const char *rw_inname, const char *rw_outname, int has_meta) {
     // write secret into image
     secret *myse = secret_create(has_meta);
@@ -52,9 +65,11 @@ int main(int argc, char *argv[]) {
 
     secret_init();
 
+    static const char *volume_inname = "H:\\img_test\\test_jpg.jpg";
     static const char *rw_inname = "H:\\img_test\\test_jpg2.jpg";
     static const char *rw_outname = "H:\\img_test\\test_jpg2_out.jpg";
 
+    test_volume(volume_inname, 1);
     test_mem_rw(rw_inname, rw_outname, 1);
     test_file_rw(rw_inname, rw_outname, 1);
 
