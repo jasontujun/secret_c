@@ -16,18 +16,18 @@
 #include "secret_struct.h"
 
 // 通用错误码
-#define ERROR_COMMON_PARAM_NULL -1
-#define ERROR_COMMON_FORMAT_NOT_SUPPORT -2
-#define ERROR_COMMON_VOLUME_INSUFFICIENT -3
-#define ERROR_COMMON_FILE_R_OPEN_FAIL -10
-#define ERROR_COMMON_FILE_W_OPEN_FAIL -11
-#define ERROR_COMMON_FILE_READ_FAIL -12
-#define ERROR_COMMON_FILE_WRITE_FAIL -13
-#define ERROR_COMMON_FILE_EMPTY -14
-#define ERROR_COMMON_META_PARSE_FAIL -20
-#define ERROR_COMMON_META_CREATE_FAIL -21
-#define ERROR_COMMON_CRC_CHECK_FAIL -30
-#define ERROR_COMMON_CRC_CAL_FAIL -31
+#define ERROR_COMMON_PARAM_NULL -11
+#define ERROR_COMMON_FORMAT_NOT_SUPPORT -12
+#define ERROR_COMMON_VOLUME_INSUFFICIENT -13
+#define ERROR_COMMON_FILE_R_OPEN_FAIL -21
+#define ERROR_COMMON_FILE_W_OPEN_FAIL -22
+#define ERROR_COMMON_FILE_READ_FAIL -23
+#define ERROR_COMMON_FILE_WRITE_FAIL -24
+#define ERROR_COMMON_FILE_EMPTY -25
+#define ERROR_COMMON_META_PARSE_FAIL -31
+#define ERROR_COMMON_META_CREATE_FAIL -32
+#define ERROR_COMMON_CRC_CHECK_FAIL -41
+#define ERROR_COMMON_CRC_CAL_FAIL -42
 
 /**
  * 定义了针对的特定文件格式的secret处理器所必须具备的函数接口。
@@ -110,8 +110,6 @@ int secret_file_dig(const char *se_file, secret *se);
  * @param se_input_file 输入图片文件的绝对路径(非空)。
  * @param se_output_file 输出图片文件的绝对路径(非空)。
  * @param se secret结构体，表示secret信息(非空)。
- * @param min_size 最小写入字节数。如果该值小于等于0，表示没有最小写入字节数限制，
- * 能写入多少secret信息就写入多少，否则表示至少写入指定字节数的secret信息。
  * @return 如果写入成功，返回写入secret信息的字节数(包含meta信息和crc校验码,大于等于0)；
  *         如果写入失败，返回对应的错误码(小于0)(详情请参考secret_file.h的通用错误码).
  */

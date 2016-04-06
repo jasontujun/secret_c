@@ -36,7 +36,7 @@ int secret_register_handler(char* format, secret_file_handler* handler, int over
     }
     struct format_node **cur_node = &handler_list;
     while (*cur_node) {
-        if (stricmp((*cur_node)->format, format) == 0) {
+        if (strcmp((*cur_node)->format, format) == 0) {
             if (override) {
                 (*cur_node)->handler = handler;
                 return 1;
@@ -57,7 +57,7 @@ int secret_register_handler(char* format, secret_file_handler* handler, int over
 int secret_unregister_handler(char* format) {
     struct format_node **cur_node = &handler_list;
     while (*cur_node) {
-        if (stricmp((*cur_node)->format, format) == 0) {
+        if (strcmp((*cur_node)->format, format) == 0) {
             free(*cur_node);
             *cur_node = (*cur_node)->next;
             return 1;

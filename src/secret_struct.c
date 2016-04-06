@@ -43,10 +43,11 @@ secret *secret_create(int meta) {
     return se;
 }
 
-void secret_destroy(secret *se){
+void secret_destroy(secret *se, int destroy_data){
     if (se) {
-        free(se->file_path);
-        free(se->data);
+        if (destroy_data) {
+            free(se->data);
+        }
         se->size = 0;
         secret_meta_destroy(se->meta);
         free(se);

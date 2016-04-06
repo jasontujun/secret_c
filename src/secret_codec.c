@@ -3,7 +3,6 @@
 //
 
 #include <string.h>
-#include <secret_codec.h>
 #include "secret_codec.h"
 
 #ifndef to_odd

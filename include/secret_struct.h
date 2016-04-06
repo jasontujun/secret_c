@@ -52,8 +52,10 @@ secret *secret_create(int meta);
 /**
  * 回收secret结构体。
  * @param se secret结构体。
+ * @param destroy_data 标识是否回收data指针的数据区。回收则值为非0，不会收则为0。
+ * 注意：该函数并不会回收file_path指向的字符串，需要调用者自己负责。
  */
-void secret_destroy(secret *se);
+void secret_destroy(secret *se, int destroy_data);
 
 /**
  * 解析数据流中的meta字节数据，并转化为secret_meta结构体(同时进行格式验证)。
