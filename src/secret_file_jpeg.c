@@ -399,7 +399,9 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
     EXCEPTION: if (error_code != 0) {
         jpeg_destroy_decompress(&srcinfo);
         fclose(infile);
-        fclose(secret_file);
+        if (secret_file) {
+            fclose(secret_file);
+        }
         free(secret_memory);
         free(secret_buf);
         free(meta_buf);
@@ -555,7 +557,9 @@ static int secret_jpeg_dig(const char *se_file, secret *se) {
     jpeg_finish_decompress(&srcinfo);
     jpeg_destroy_decompress(&srcinfo);
     fclose(infile);
-    fclose(secret_file);
+    if (secret_file) {
+        fclose(secret_file);
+    }
     free(secret_buf);
     free(meta_buf);
     free(crc_buf);
@@ -621,7 +625,9 @@ static int secret_jpeg_hide(const char *se_input_file,
         jpeg_destroy_compress(&dstinfo);
         fclose(infile);
         fclose(outfile);
-        fclose(secret_file);
+        if (secret_file) {
+            fclose(secret_file);
+        }
         free(secret_buf);
         free(meta_buf);
         free(crc_buf);
@@ -805,7 +811,9 @@ static int secret_jpeg_hide(const char *se_input_file,
     jpeg_destroy_decompress(&srcinfo);
     fclose(infile);
     fclose(outfile);
-    fclose(secret_file);
+    if (secret_file) {
+        fclose(secret_file);
+    }
     free(secret_buf);
     free(meta_buf);
     free(crc_buf);

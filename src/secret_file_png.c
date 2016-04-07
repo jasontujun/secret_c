@@ -569,7 +569,9 @@ static int secret_png_dig(const char *se_file, secret *se) {
         row_buf = NULL;
         png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
         fclose(fpin);
-        fclose(secret_file);
+        if (secret_file) {
+            fclose(secret_file);
+        }
         free(secret_memory);
         free(secret_buf);
         free(meta_buf);
@@ -759,7 +761,9 @@ static int secret_png_dig(const char *se_file, secret *se) {
     png_debug("[secret_png_dig]Destroying read_ptr, read_info_ptr");
     png_destroy_read_struct(&read_ptr, &read_info_ptr, NULL);
     fclose(fpin);
-    fclose(secret_file);
+    if (secret_file) {
+        fclose(secret_file);
+    }
     free(secret_buf);
     free(meta_buf);
     free(crc_buf);
@@ -828,7 +832,9 @@ static int secret_png_hide(const char *se_input_file,
         png_destroy_write_struct(&write_ptr, &write_info_ptr);
         fclose(fpin);
         fclose(fpout);
-        fclose(secret_file);
+        if (secret_file) {
+            fclose(secret_file);
+        }
         free(secret_buf);
         free(meta_buf);
         free(crc_buf);
@@ -1324,7 +1330,9 @@ static int secret_png_hide(const char *se_input_file,
     png_debug("[secret_png_hide]Destruction complete.");
     fclose(fpin);
     fclose(fpout);
-    fclose(secret_file);
+    if (secret_file) {
+        fclose(secret_file);
+    }
     free(secret_buf);
     free(meta_buf);
     free(crc_buf);
