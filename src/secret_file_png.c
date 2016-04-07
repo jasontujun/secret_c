@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <secret_struct.h>
 #include "png.h"
 #include "secret_file.h"
 #include "secret_codec.h"
